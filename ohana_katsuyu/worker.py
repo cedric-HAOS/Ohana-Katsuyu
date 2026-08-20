@@ -8,6 +8,7 @@ import logging
 import os
 import platform
 import socket
+import ssl
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -64,6 +65,7 @@ class AgentClient:
     base_url: str
     token: str
     timeout_seconds: float = 10.0
+    ca_certificate_file: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url.strip():
@@ -101,7 +103,16 @@ class AgentClient:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
+            context = None
+            if self.base_url.lower().startswith("https://"):
+                if self.ca_certificate_file is None:
+                    raise RuntimeError("Katsuyu HTTPS CA certificate is missing")
+                context = ssl.create_default_context(cafile=self.ca_certificate_file)
+            with urlopen(
+                request,
+                timeout=self.timeout_seconds,
+                context=context,
+            ) as response:
                 body = response.read()
         except HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")[:1000]
@@ -290,6 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     root = _default_root()
     parser = argparse.ArgumentParser(description="Ohana Katsuyu worker")
     parser.add_argument("--base-url", required=True)
+    parser.add_argument("--ca-file", type=Path)
     parser.add_argument("--token-file", type=Path, default=root / "katsuyu.token")
     parser.add_argument("--workspace", type=Path, default=root / "workspace")
     parser.add_argument("--log-file", type=Path, default=root / "katsuyu.log")
@@ -306,6 +318,10 @@ def main() -> None:
     arguments = build_parser().parse_args()
     if arguments.poll_seconds <= 0 or arguments.heartbeat_seconds <= 0:
         raise SystemExit("poll and heartbeat delays must be greater than zero")
+    if not arguments.base_url.lower().startswith("https://"):
+        raise SystemExit("Katsuyu requires an HTTPS Agent URL")
+    if arguments.ca_file is None or not arguments.ca_file.is_file():
+        raise SystemExit("Katsuyu HTTPS CA certificate is missing")
     try:
         token = arguments.token_file.read_text(encoding="utf-8").strip()
     except OSError as error:
@@ -328,7 +344,11 @@ def main() -> None:
     )
     workspace = KatsuyuWorkspace(arguments.workspace)
     worker = KatsuyuWorker(
-        client=AgentClient(arguments.base_url, token),
+        client=AgentClient(
+            arguments.base_url,
+            token,
+            ca_certificate_file=arguments.ca_file,
+        ),
         worker_id=arguments.worker_id,
         handlers={
             "system.health": SystemHealthHandler(workspace),

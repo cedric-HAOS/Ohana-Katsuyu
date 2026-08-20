@@ -13,6 +13,8 @@ def test_install_creates_only_the_expected_system_task(
     commands: list[list[str]] = []
     token = tmp_path / "katsuyu.token"
     token.write_text("worker-secret", encoding="utf-8")
+    ca_file = tmp_path / "agent-ca.pem"
+    ca_file.write_text("public certificate", encoding="utf-8")
     age_binary = tmp_path / "age.exe"
     age_binary.write_bytes(b"test executable")
     monkeypatch.setattr(
@@ -36,9 +38,11 @@ def test_install_creates_only_the_expected_system_task(
         [
             "install",
             "--base-url",
-            "http://infra-01.ohana.lan:8765",
+            "https://infra-01.ohana.lan:8766",
             "--token-file",
             str(token),
+            "--ca-file",
+            str(ca_file),
             "--workspace",
             str(tmp_path / "workspace"),
             "--log-file",

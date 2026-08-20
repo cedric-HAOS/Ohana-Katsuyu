@@ -17,7 +17,12 @@ from tkinter import Button, Entry, Label, StringVar, Tk, messagebox
 
 from ohana_katsuyu import __version__
 from ohana_katsuyu.handlers import HANDLER_TYPES
-from ohana_katsuyu.pairing import PairingClient, default_worker_id, normalize_agent_url
+from ohana_katsuyu.pairing import (
+    PairingClient,
+    default_worker_id,
+    format_fingerprint,
+    normalize_agent_url,
+)
 from ohana_katsuyu.updates import version_key
 from ohana_katsuyu.windows import build_parser as build_windows_parser
 from ohana_katsuyu.windows import install as install_windows_startup
@@ -33,6 +38,7 @@ class ExistingInstallation:
     base_url: str
     worker_id: str
     token: str
+    ca_file: Path | None = None
 
 
 def program_root() -> Path:
@@ -168,6 +174,7 @@ def read_existing_installation() -> ExistingInstallation | None:
         return None
     base_url = value.get("base_url")
     worker_id = value.get("worker_id")
+    configured_ca_file = value.get("ca_file")
     if not isinstance(base_url, str) or not isinstance(worker_id, str):
         return None
     try:
@@ -176,7 +183,12 @@ def read_existing_installation() -> ExistingInstallation | None:
         return None
     if not worker_id.strip():
         return None
-    return ExistingInstallation(normalized_url, worker_id, token)
+    ca_file = (
+        Path(configured_ca_file)
+        if isinstance(configured_ca_file, str) and configured_ca_file.strip()
+        else None
+    )
+    return ExistingInstallation(normalized_url, worker_id, token, ca_file)
 
 
 def stop_running_components() -> None:
@@ -241,7 +253,10 @@ def restore_payload(
     shutil.rmtree(backup_root)
 
 
-def install(agent_address: str, on_code: Callable[[str], None] | None = None) -> None:
+def install(
+    agent_address: str,
+    on_code: Callable[[str, str], None] | None = None,
+) -> None:
     require_administrator()
     current_installed_version = installed_version()
     if current_installed_version is not None:
@@ -253,15 +268,26 @@ def install(agent_address: str, on_code: Callable[[str], None] | None = None) ->
         except ValueError as error:
             raise RuntimeError("La version Katsuyu installée est invalide.") from error
     existing = read_existing_installation()
-    if existing is None:
+    secure_existing = (
+        existing is not None
+        and existing.base_url.lower().startswith("https://")
+        and existing.ca_file is not None
+        and existing.ca_file.is_file()
+    )
+    pairing_client = None
+    if not secure_existing:
         base_url = normalize_agent_url(agent_address)
         worker_id = default_worker_id()
-        pairing_client = PairingClient(base_url)
+        pairing_client = PairingClient.bootstrap(base_url)
         session = pairing_client.create(worker_id, sorted(HANDLER_TYPES))
         if on_code is not None:
-            on_code(session.verification_code)
+            on_code(
+                session.verification_code,
+                format_fingerprint(session.tls_ca_sha256),
+            )
         token = pairing_client.wait_for_approval(session)
     else:
+        assert existing is not None
         base_url = existing.base_url
         worker_id = existing.worker_id
         token = existing.token
@@ -282,10 +308,21 @@ def install(agent_address: str, on_code: Callable[[str], None] | None = None) ->
 
     token_file = state_root / "katsuyu.token"
     token_file.write_text(token, encoding="utf-8")
+    ca_file = state_root / "agent-ca.pem"
+    if pairing_client is not None:
+        ca_file.write_text(pairing_client.trust.ca_certificate_pem, encoding="ascii")
+    elif existing is not None and existing.ca_file != ca_file:
+        assert existing.ca_file is not None
+        shutil.copy2(existing.ca_file, ca_file)
     config_file = state_root / "config.json"
     config_file.write_text(
         json.dumps(
-            {"base_url": base_url, "worker_id": worker_id}, separators=(",", ":")
+            {
+                "base_url": base_url,
+                "worker_id": worker_id,
+                "ca_file": str(ca_file),
+            },
+            separators=(",", ":"),
         ),
         encoding="utf-8",
     )
@@ -297,11 +334,11 @@ def install(agent_address: str, on_code: Callable[[str], None] | None = None) ->
     secure_paths(
         state_root,
         token_file,
-        [config_file, status_file, log_file],
+        [ca_file, config_file, status_file, log_file],
         [workspace],
     )
 
-    AgentClient(base_url, token).register(
+    AgentClient(base_url, token, ca_certificate_file=ca_file).register(
         {
             "protocol_version": 1,
             "worker_id": worker_id,
@@ -321,6 +358,8 @@ def install(agent_address: str, on_code: Callable[[str], None] | None = None) ->
             base_url,
             "--token-file",
             str(token_file),
+            "--ca-file",
+            str(ca_file),
             "--workspace",
             str(workspace),
             "--log-file",
@@ -390,7 +429,7 @@ def uninstall() -> str:
             shutil.rmtree(child)
         else:
             child.unlink(missing_ok=True)
-    for name in ("katsuyu.token", "config.json", "status.json"):
+    for name in ("katsuyu.token", "agent-ca.pem", "config.json", "status.json"):
         (data_root() / name).unlink(missing_ok=True)
     move_file_delay_until_reboot = 4
     ctypes.windll.kernel32.MoveFileExW(
@@ -430,7 +469,15 @@ class InstallerWindow:
         if existing is not None:
             self.entry.configure(state="disabled")
         self.code = Label(self.root, text="", font=("Segoe UI", 20, "bold"))
-        self.code.pack(pady=12)
+        self.code.pack(pady=(12, 4))
+        self.fingerprint = Label(
+            self.root,
+            text="",
+            font=("Consolas", 8),
+            justify="center",
+            wraplength=470,
+        )
+        self.fingerprint.pack(pady=(0, 8))
         Label(self.root, textvariable=self.status, wraplength=470).pack(pady=4)
         action = (
             "Mettre à jour Katsuyu" if existing is not None else "Installer Katsuyu"
@@ -452,13 +499,17 @@ class InstallerWindow:
             return
         self.root.after(0, self._complete)
 
-    def _show_code(self, value: str) -> None:
+    def _show_code(self, value: str, fingerprint: str) -> None:
         self.root.after(0, lambda: self.code.configure(text=value))
         self.root.after(
             0,
+            lambda: self.fingerprint.configure(text=f"SHA-256\n{fingerprint}"),
+        )
+        self.root.after(
+            0,
             lambda: self.status.set(
-                "Dans Vision > Workers Katsuyu, comparez ce code puis cliquez "
-                "sur Autoriser."
+                "Dans Vision > Workers Katsuyu, comparez le code et toute "
+                "l’empreinte SHA-256, puis cliquez sur Autoriser."
             ),
         )
 

@@ -2,6 +2,25 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.2.0] — Appairage HTTPS épinglé — 2026-08-20
+
+### Ajouté
+
+- L'installateur récupère l'autorité publique d'Agent, affiche son empreinte
+  SHA-256 avec le code d'appairage puis conserve le certificat dans l'état
+  sécurisé du worker.
+- Le worker réutilise ce certificat épinglé pour toutes ses communications
+  HTTPS avec Agent.
+
+### Sécurité
+
+- Les adresses Agent en HTTP, avec identifiants, chemin ou paramètres sont
+  refusées ; le port worker 8766 est proposé par défaut.
+- Aucun secret n'est envoyé avant validation du nom d'hôte avec l'autorité
+  récupérée, et l'empreinte retournée par l'appairage doit correspondre.
+- Une installation antérieure en HTTP ne peut pas être réutilisée silencieusement
+  et doit faire l'objet d'un nouvel appairage sécurisé.
+
 ## [0.1.0] — Katsuyu MVP — 2026-08-20
 
 ### Ajouté

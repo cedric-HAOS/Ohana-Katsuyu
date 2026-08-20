@@ -16,11 +16,14 @@ def test_existing_installation_reuses_private_identity(
 ) -> None:
     monkeypatch.setattr(setup, "data_root", lambda: tmp_path)
     (tmp_path / "katsuyu.token").write_text("secret", encoding="utf-8")
+    ca_file = tmp_path / "agent-ca.pem"
+    ca_file.write_text("public certificate", encoding="utf-8")
     (tmp_path / "config.json").write_text(
         json.dumps(
             {
-                "base_url": "http://infra-01.ohana.lan:8765/",
+                "base_url": "https://infra-01.ohana.lan:8766/",
                 "worker_id": "bubule",
+                "ca_file": str(ca_file),
             }
         ),
         encoding="utf-8",
@@ -29,7 +32,7 @@ def test_existing_installation_reuses_private_identity(
     existing = setup.read_existing_installation()
 
     assert existing == setup.ExistingInstallation(
-        "http://infra-01.ohana.lan:8765", "bubule", "secret"
+        "https://infra-01.ohana.lan:8766", "bubule", "secret", ca_file
     )
 
 
@@ -67,7 +70,7 @@ def test_installer_refuses_to_downgrade_existing_katsuyu(
     monkeypatch: Any,
 ) -> None:
     monkeypatch.setattr(setup, "require_administrator", lambda: None)
-    monkeypatch.setattr(setup, "installed_version", lambda: "0.2.0")
+    monkeypatch.setattr(setup, "installed_version", lambda: "0.3.0")
 
     with pytest.raises(RuntimeError, match="plus récente"):
         setup.install("infra-01.ohana.lan")
@@ -90,14 +93,25 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
     setup_source.write_bytes(b"setup")
     (state / "status.json").write_text('{"state":"connected"}', encoding="utf-8")
     existing = setup.ExistingInstallation(
-        "http://infra-01.ohana.lan:8765", "bubule", "existing-token"
+        "https://infra-01.ohana.lan:8766",
+        "bubule",
+        "existing-token",
+        state / "agent-ca.pem",
     )
+    (state / "agent-ca.pem").write_text("public certificate", encoding="utf-8")
     registrations: list[tuple[str, dict[str, object]]] = []
     stopped: list[bool] = []
 
     class FakeAgentClient:
-        def __init__(self, _base_url: str, token: str) -> None:
+        def __init__(
+            self,
+            _base_url: str,
+            token: str,
+            *,
+            ca_certificate_file: Path,
+        ) -> None:
             self.token = token
+            assert ca_certificate_file == state / "agent-ca.pem"
 
         def register(self, document: dict[str, object]) -> None:
             registrations.append((self.token, document))
@@ -126,7 +140,7 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
 
     assert stopped == [True]
     assert registrations[0][0] == "existing-token"
-    assert registrations[0][1]["worker_version"] == "0.1.0"
+    assert registrations[0][1]["worker_version"] == "0.2.0"
     assert (state / "status.json").read_text(encoding="utf-8") == (
         '{"state":"connected"}'
     )

@@ -21,12 +21,14 @@ L’utilisateur lance uniquement `KatsuyuSetup.exe` en administrateur. Aucun
 Python ni `age` ne doit être installé séparément. L’installateur :
 
 1. demande l’adresse d’Ohana-Agent ;
-2. teste immédiatement l’endpoint d’appairage ;
-3. affiche un code court à comparer dans **Vision > Workers Katsuyu** ;
+2. récupère le certificat public de l'autorité locale puis valide immédiatement
+   l'endpoint HTTPS d'appairage ;
+3. affiche un code court et l'empreinte SHA-256 complète à comparer dans
+   **Vision > Workers Katsuyu** ;
 4. attend l’autorisation explicite dans Vision puis récupère un jeton worker
    individuel, une seule fois ;
 5. installe le runtime autonome, `age.exe` et sa licence ;
-6. protège le jeton et le workspace par ACL ;
+6. protège le jeton, le certificat public et le workspace par ACL ;
 7. teste un véritable enregistrement worker auprès d’Agent ;
 8. crée la tâche de démarrage sous `SYSTEM`, lance le worker et installe
    l’icône de notification ;
@@ -35,7 +37,8 @@ Python ni `age` ne doit être installé séparément. L’installateur :
 Le worker est installé dans `C:\Program Files\Ohana\Katsuyu`. Son état, ses
 logs et son workspace restent sous `C:\ProgramData\Ohana\Katsuyu`. Le jeton
 n’apparaît jamais dans une ligne de commande, un log ou le document lu par
-l’icône.
+l’icône. Toutes les opérations worker utilisent HTTPS sur le port dédié Agent ;
+HTTP est refusé par l'installateur et par le worker installé.
 
 La désinstallation Windows arrête et désenregistre Katsuyu, retire le jeton et
 les exécutables, mais conserve volontairement les logs et le workspace.
@@ -77,6 +80,8 @@ logs. Il ne peut ni lancer, ni annuler, ni valider une opération.
 
 Le protocole v1 réutilise exclusivement les endpoints worker d'Ohana-Agent :
 
+- `GET /v1/jobs/workers/trust` pour amorcer la confiance publique avant tout
+  échange de secret ;
 - `POST /v1/jobs/workers/pairings` et `.../{id}/poll` pendant l’installation ;
 - `POST /v1/jobs/workers/register` ;
 - `POST /v1/jobs/claim` ;
@@ -88,6 +93,11 @@ l'état courant. Un état `CANCELLED` ou `TIMEOUT` interrompt le handler à son
 prochain point sûr. Après une perte de connexion, le traitement est arrêté et
 Agent récupère le job à l'expiration du bail. Les sorties déjà publiées dans le
 workspace sont vérifiées et réutilisées lors d'une reprise.
+
+Le certificat public téléchargé n'est accepté définitivement qu'après la
+comparaison humaine de son empreinte avec Vision. Katsuyu utilise ensuite un
+contexte TLS qui exige cette autorité et vérifie le nom DNS ou l'adresse IP du
+certificat serveur. Aucun mode `verify=False` n'est utilisé après l'amorçage.
 
 Les logs tournent à 5 Mio avec trois archives. Aucun journal distant n'est
 centralisé par Katsuyu.

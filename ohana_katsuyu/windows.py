@@ -81,6 +81,10 @@ def install(arguments: argparse.Namespace) -> None:
         raise RuntimeError(
             f"worker token file is missing or empty: {arguments.token_file}"
         )
+    if not arguments.ca_file.is_file() or arguments.ca_file.stat().st_size == 0:
+        raise RuntimeError(
+            f"worker CA certificate is missing or empty: {arguments.ca_file}"
+        )
     if arguments.age_binary.is_absolute():
         if not arguments.age_binary.is_file():
             raise RuntimeError(f"age executable not found: {arguments.age_binary}")
@@ -106,6 +110,8 @@ def install(arguments: argparse.Namespace) -> None:
             arguments.base_url,
             "--token-file",
             str(arguments.token_file.resolve()),
+            "--ca-file",
+            str(arguments.ca_file.resolve()),
             "--workspace",
             str(arguments.workspace.resolve()),
             "--log-file",
@@ -167,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument(
         "--token-file", type=Path, default=root / "katsuyu.token"
     )
+    install_parser.add_argument("--ca-file", type=Path, required=True)
     install_parser.add_argument("--workspace", type=Path, default=root / "workspace")
     install_parser.add_argument("--log-file", type=Path, default=root / "katsuyu.log")
     install_parser.add_argument(
