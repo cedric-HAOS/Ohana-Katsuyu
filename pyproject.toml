@@ -1,0 +1,71 @@
+[build-system]
+requires = [
+    "setuptools>=77",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "ohana-katsuyu"
+version = "0.1.0"
+description = "Deterministic Windows worker for Ohana-Agent distributed jobs."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Cédric Harnois" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: No Input/Output (Daemon)",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Archiving :: Backup",
+]
+dependencies = [
+    "Pillow>=11,<13",
+    "pydantic>=2,<3",
+    "pystray>=0.19,<1",
+]
+
+
+[project.scripts]
+ohana-katsuyu = "ohana_katsuyu.worker:main"
+ohana-katsuyu-windows = "ohana_katsuyu.windows:main"
+ohana-katsuyu-setup = "ohana_katsuyu.setup:main"
+ohana-katsuyu-tray = "ohana_katsuyu.tray:main"
+
+
+[project.optional-dependencies]
+development = [
+    "build",
+    "pytest",
+    "ruff",
+]
+windows-build = [
+    "pyinstaller>=6.15,<7",
+]
+
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ohana_katsuyu*"]
+
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
