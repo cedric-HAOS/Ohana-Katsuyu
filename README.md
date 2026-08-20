@@ -10,6 +10,8 @@ ni créer un job, ni administrer Agent, ni exécuter une commande arbitraire.
 - `backup.compress` produit un fichier gzip déterministe ;
 - `backup.encrypt` chiffre un fichier avec la clé publique `age` fournie ;
 - `backup.verify` vérifie un SHA-256 et, facultativement, une taille.
+- `backup.infra` récupère le tar INFRA-01 lié au job, le compresse, le chiffre,
+  le vérifie et renvoie l'artefact à Agent pour publication distante en flux.
 
 Katsuyu fonctionne sans LLM. Tous les chemins de jobs sont relatifs à
 `C:\ProgramData\Ohana\Katsuyu\workspace`. Les chemins absolus, traversées `..`,
@@ -87,6 +89,12 @@ Le protocole v1 réutilise exclusivement les endpoints worker d'Ohana-Agent :
 - `POST /v1/jobs/claim` ;
 - `POST /v1/jobs/{job_id}/heartbeat` ;
 - `POST /v1/jobs/{job_id}/complete`.
+- `GET /v1/jobs/{job_id}/input` et `POST /v1/jobs/{job_id}/artifact`, uniquement
+  pour le propriétaire d'un job `backup.infra` en cours.
+
+Le résultat `backup.infra` inclut la durée, le temps CPU, le pic de mémoire du
+processus, les octets logiques lus/écrits, les tailles et les SHA-256. Les
+fichiers intermédiaires sont supprimés du workspace après succès ou échec.
 
 Les heartbeats publient la progression, renouvellent le bail et retournent
 l'état courant. Un état `CANCELLED` ou `TIMEOUT` interrompt le handler à son

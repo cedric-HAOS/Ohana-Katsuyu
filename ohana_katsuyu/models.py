@@ -102,6 +102,10 @@ class WorkerRegistration(ProtocolModel):
 class WorkerDocument(WorkerRegistration):
     registered_at: datetime
     last_seen_at: datetime
+    availability: Literal["AVAILABLE", "UNAVAILABLE", "WAKING"] = "AVAILABLE"
+    woken_by_ohana: bool = False
+    wake_requested_at: datetime | None = None
+    wake_deadline_at: datetime | None = None
 
 
 class SystemHealthParameters(ProtocolModel):
@@ -165,3 +169,25 @@ class BackupVerifyResult(ProtocolModel):
     size: int = Field(ge=0)
     sha256_matches: bool
     size_matches: bool | None = None
+
+
+class InfraBackupParameters(ProtocolModel):
+    backup_id: str = Field(pattern=r"^[0-9]{8}T[0-9]{6}Z$")
+    recipient: str = Field(min_length=20, max_length=200, pattern=r"^age1[0-9a-z]+$")
+    compression_level: int = Field(default=6, ge=1, le=9)
+
+
+class InfraBackupResult(ProtocolModel):
+    backup_id: str = Field(pattern=r"^[0-9]{8}T[0-9]{6}Z$")
+    remote_path: str = Field(min_length=1, max_length=1000)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_size: int = Field(ge=1)
+    compressed_size: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=1)
+    deleted_remote_backups: int = Field(default=0, ge=0)
+    duration_seconds: float = Field(ge=0)
+    cpu_seconds: float = Field(ge=0)
+    peak_working_set_bytes: int | None = Field(default=None, ge=0)
+    logical_io_read_bytes: int = Field(ge=0)
+    logical_io_written_bytes: int = Field(ge=0)

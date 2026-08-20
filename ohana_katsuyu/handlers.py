@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from threading import Event
-from time import monotonic, sleep
-from typing import Any
+from time import monotonic, process_time, sleep
+from typing import Any, Protocol
 
 from ohana_katsuyu.models import (
     BackupCompressParameters,
@@ -25,6 +25,8 @@ from ohana_katsuyu.models import (
     BackupEncryptResult,
     BackupVerifyParameters,
     BackupVerifyResult,
+    InfraBackupParameters,
+    InfraBackupResult,
     JobProgress,
     SystemHealthIssue,
     SystemHealthParameters,
@@ -37,6 +39,7 @@ HANDLER_TYPES = (
     "backup.compress",
     "backup.encrypt",
     "backup.verify",
+    "backup.infra",
 )
 
 
@@ -53,6 +56,9 @@ class HandlerContext:
     cancelled: Event = field(default_factory=Event)
     deadline: float | None = None
     progress_callback: Callable[[JobProgress], None] = lambda _value: None
+    job_id: str | None = None
+    worker_id: str | None = None
+    attempt: int = 0
 
     def check(self) -> None:
         if self.cancelled.is_set():
@@ -106,6 +112,27 @@ class KatsuyuWorkspace:
         return resolved
 
 
+class InfraBackupTransferClient(Protocol):
+    def download_job_input(
+        self,
+        job_id: str,
+        worker_id: str,
+        attempt: int,
+        destination: Path,
+        context: HandlerContext,
+    ) -> tuple[str, int]: ...
+
+    def upload_job_artifact(
+        self,
+        job_id: str,
+        worker_id: str,
+        attempt: int,
+        source: Path,
+        sha256: str,
+        context: HandlerContext,
+    ) -> dict[str, Any]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SystemMetrics:
     platform: str
@@ -135,6 +162,34 @@ class _MemoryStatus(ctypes.Structure):
         ("available_virtual", ctypes.c_uint64),
         ("available_extended_virtual", ctypes.c_uint64),
     ]
+
+
+class _ProcessMemoryCounters(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_uint32),
+        ("page_fault_count", ctypes.c_uint32),
+        ("peak_working_set_size", ctypes.c_size_t),
+        ("working_set_size", ctypes.c_size_t),
+        ("quota_peak_paged_pool_usage", ctypes.c_size_t),
+        ("quota_paged_pool_usage", ctypes.c_size_t),
+        ("quota_peak_non_paged_pool_usage", ctypes.c_size_t),
+        ("quota_non_paged_pool_usage", ctypes.c_size_t),
+        ("pagefile_usage", ctypes.c_size_t),
+        ("peak_pagefile_usage", ctypes.c_size_t),
+    ]
+
+
+def _peak_working_set_bytes() -> int | None:
+    if os.name != "nt":
+        return None
+    counters = _ProcessMemoryCounters()
+    counters.cb = ctypes.sizeof(counters)
+    process = ctypes.windll.kernel32.GetCurrentProcess()  # type: ignore[attr-defined]
+    if not ctypes.windll.psapi.GetProcessMemoryInfo(  # type: ignore[attr-defined]
+        process, ctypes.byref(counters), counters.cb
+    ):
+        return None
+    return int(counters.peak_working_set_size)
 
 
 @dataclass(slots=True)
@@ -414,6 +469,103 @@ class BackupVerifyHandler:
             sha256_matches=sha256_matches,
             size_matches=size_matches,
         ).model_dump(mode="json")
+
+
+@dataclass(slots=True)
+class InfraBackupHandler:
+    """Fetch, compress, encrypt and return one Agent-owned INFRA backup."""
+
+    workspace: KatsuyuWorkspace
+    client: InfraBackupTransferClient
+    age_binary: Path = Path("age.exe")
+
+    def execute(
+        self, parameters: dict[str, Any], context: HandlerContext | None = None
+    ) -> dict[str, Any]:
+        context = context or HandlerContext()
+        request = InfraBackupParameters.model_validate(parameters)
+        started_at = monotonic()
+        cpu_started_at = process_time()
+        if not context.job_id or not context.worker_id or context.attempt < 1:
+            raise ValueError("distributed backup context is incomplete")
+        prefix = f"jobs/{context.job_id}"
+        source_relative = f"{prefix}/source.tar"
+        compressed_relative = f"{prefix}/source.tar.gz"
+        encrypted_relative = f"{prefix}/{request.backup_id}.tar.gz.age"
+        source = self.workspace.output_file(source_relative)
+        compressed = self.workspace.output_file(compressed_relative)
+        encrypted = self.workspace.output_file(encrypted_relative)
+        for path in (source, compressed, encrypted):
+            path.unlink(missing_ok=True)
+        try:
+            context.report(1, "infra.download")
+            source_sha256, source_size = self.client.download_job_input(
+                context.job_id,
+                context.worker_id,
+                context.attempt,
+                source,
+                context,
+            )
+            compression = BackupCompressHandler(self.workspace).execute(
+                {
+                    "source": source_relative,
+                    "destination": compressed_relative,
+                    "compression_level": request.compression_level,
+                },
+                context,
+            )
+            encryption = BackupEncryptHandler(
+                self.workspace, self.age_binary
+            ).execute(
+                {
+                    "source": compressed_relative,
+                    "destination": encrypted_relative,
+                    "recipient": request.recipient,
+                },
+                context,
+            )
+            receipt = self.client.upload_job_artifact(
+                context.job_id,
+                context.worker_id,
+                context.attempt,
+                encrypted,
+                str(encryption["destination_sha256"]),
+                context,
+            )
+            result = InfraBackupResult(
+                backup_id=request.backup_id,
+                remote_path=receipt["remote_path"],
+                source_sha256=source_sha256,
+                source_size=source_size,
+                compressed_size=int(compression["destination_size"]),
+                sha256=receipt["sha256"],
+                size_bytes=int(receipt["size_bytes"]),
+                deleted_remote_backups=int(receipt["deleted_remote_backups"]),
+                duration_seconds=monotonic() - started_at,
+                cpu_seconds=process_time() - cpu_started_at,
+                peak_working_set_bytes=_peak_working_set_bytes(),
+                logical_io_read_bytes=(
+                    source_size
+                    + source_size
+                    + int(compression["destination_size"])
+                    + int(encryption["destination_size"])
+                ),
+                logical_io_written_bytes=(
+                    source_size
+                    + int(compression["destination_size"])
+                    + int(encryption["destination_size"])
+                    + int(receipt["size_bytes"])
+                ),
+            )
+            context.report(100, "infra.complete")
+            return result.model_dump(mode="json")
+        finally:
+            for path in (source, compressed, encrypted):
+                path.unlink(missing_ok=True)
+            try:
+                source.parent.rmdir()
+            except OSError:
+                pass
 
 
 def _temporary_path(destination: Path) -> Path:

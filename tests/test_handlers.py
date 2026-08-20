@@ -16,6 +16,7 @@ from ohana_katsuyu.handlers import (
     BackupEncryptHandler,
     BackupVerifyHandler,
     HandlerContext,
+    InfraBackupHandler,
     JobCancelledError,
     KatsuyuWorkspace,
     SystemHealthHandler,
@@ -139,3 +140,78 @@ def test_encrypt_uses_only_the_configured_age_binary(
     assert calls[0][0] == r"C:\Tools\age.exe"
     assert result["recipient"] == recipient
     assert result["destination_sha256"] == hashlib.sha256(b"encrypted").hexdigest()
+
+
+def test_infra_backup_fetches_and_returns_only_a_verified_remote_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeProcess:
+        returncode = 0
+        stderr = StringIO("")
+
+        def __init__(self, command: list[str], **_kwargs: object) -> None:
+            Path(command[command.index("--output") + 1]).write_bytes(b"encrypted")
+
+        def poll(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: int) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    class FakeTransfer:
+        def download_job_input(
+            self,
+            job_id: str,
+            worker_id: str,
+            attempt: int,
+            destination: Path,
+            context: HandlerContext,
+        ) -> tuple[str, int]:
+            assert (job_id, worker_id, attempt) == ("job-1", "bubule", 2)
+            context.check()
+            content = b"uncompressed tar payload"
+            destination.write_bytes(content)
+            return hashlib.sha256(content).hexdigest(), len(content)
+
+        def upload_job_artifact(
+            self,
+            job_id: str,
+            worker_id: str,
+            attempt: int,
+            source: Path,
+            sha256: str,
+            context: HandlerContext,
+        ) -> dict[str, object]:
+            context.check()
+            assert source.read_bytes() == b"encrypted"
+            assert sha256 == hashlib.sha256(b"encrypted").hexdigest()
+            return {
+                "remote_path": "icloud:Ohana/Backups/infra-01/20260820T120000Z",
+                "sha256": sha256,
+                "size_bytes": len(b"encrypted"),
+                "deleted_remote_backups": 1,
+            }
+
+    monkeypatch.setattr("ohana_katsuyu.handlers.subprocess.Popen", FakeProcess)
+    result = InfraBackupHandler(
+        KatsuyuWorkspace(tmp_path),
+        FakeTransfer(),  # type: ignore[arg-type]
+        Path(r"C:\Tools\age.exe"),
+    ).execute(
+        {
+            "backup_id": "20260820T120000Z",
+            "recipient": "age1" + "q" * 58,
+            "compression_level": 6,
+        },
+        HandlerContext(job_id="job-1", worker_id="bubule", attempt=2),
+    )
+
+    assert result["backup_id"] == "20260820T120000Z"
+    assert result["size_bytes"] == len(b"encrypted")
+    assert not (tmp_path / "jobs" / "job-1").exists()

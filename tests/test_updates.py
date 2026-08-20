@@ -42,7 +42,7 @@ def test_read_latest_release_accepts_only_the_official_stable_release(
         url="https://github.com/cedric-HAOS/Ohana-Katsuyu/releases/tag/v0.2.0",
     )
     assert requests[0][1] == 3
-    assert requests[0][0].get_header("User-agent") == "Ohana-Katsuyu/0.2.1"
+    assert requests[0][0].get_header("User-agent") == "Ohana-Katsuyu/0.3.0"
 
 
 @pytest.mark.parametrize(
@@ -93,8 +93,8 @@ def test_refresh_is_cached_for_24_hours_and_preserves_worker_state(
         lambda **_kwargs: (
             calls.append(True)
             or StableRelease(
-                "0.3.0",
-                "https://github.com/cedric-HAOS/Ohana-Katsuyu/releases/tag/v0.3.0",
+                "0.4.0",
+                "https://github.com/cedric-HAOS/Ohana-Katsuyu/releases/tag/v0.4.0",
             )
         ),
     )
@@ -105,10 +105,10 @@ def test_refresh_is_cached_for_24_hours_and_preserves_worker_state(
 
     assert first.state == "connected"
     assert first.update_state == "available"
-    assert first.latest_version == "0.3.0"
+    assert first.latest_version == "0.4.0"
     assert second == first
     assert calls == [True]
-    assert "mise à jour 0.3.0 disponible" in tooltip(first)
+    assert "mise à jour 0.4.0 disponible" in tooltip(first)
 
 
 def test_failed_check_is_informational_and_does_not_mark_agent_as_failed(

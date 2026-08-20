@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
 from time import sleep
 from typing import Any, cast
 from uuid import uuid4
@@ -131,6 +135,75 @@ def test_worker_does_nothing_when_no_job_is_available() -> None:
 
     assert worker.run_once() is False
     assert client.completions == []
+
+
+def test_agent_client_streams_backup_input_and_exact_artifact_length(
+    tmp_path: Path,
+) -> None:
+    source = b"uncompressed source tar"
+    artifact = b"encrypted artifact"
+    received: list[bytes] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            assert self.headers["Authorization"] == "Bearer worker-secret"
+            assert self.headers["X-Ohana-Worker-Id"] == "bubule"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(source)))
+            self.end_headers()
+            self.wfile.write(source)
+
+        def do_POST(self) -> None:  # noqa: N802
+            size = int(self.headers["Content-Length"])
+            received.append(self.rfile.read(size))
+            body = json.dumps(
+                {
+                    "remote_path": "icloud:Ohana/Backups/infra-01/test",
+                    "sha256": hashlib.sha256(artifact).hexdigest(),
+                    "size_bytes": len(artifact),
+                    "deleted_remote_backups": 0,
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = AgentClient(
+        f"http://127.0.0.1:{server.server_address[1]}", "worker-secret"
+    )
+    destination = tmp_path / "source.tar"
+    encrypted = tmp_path / "artifact.age"
+    encrypted.write_bytes(artifact)
+    context = HandlerContext()
+    try:
+        sha256, size = client.download_job_input(
+            "job-1", "bubule", 1, destination, context
+        )
+        receipt = client.upload_job_artifact(
+            "job-1",
+            "bubule",
+            1,
+            encrypted,
+            hashlib.sha256(artifact).hexdigest(),
+            context,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert destination.read_bytes() == source
+    assert sha256 == hashlib.sha256(source).hexdigest()
+    assert size == len(source)
+    assert received == [artifact]
+    assert receipt["size_bytes"] == len(artifact)
 
 
 def test_worker_stops_after_agent_cancellation() -> None:

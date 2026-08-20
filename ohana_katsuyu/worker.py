@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ from ohana_katsuyu.handlers import (
     BackupEncryptHandler,
     BackupVerifyHandler,
     HandlerContext,
+    InfraBackupHandler,
     JobCancelledError,
     JobTimeoutError,
     KatsuyuWorkspace,
@@ -90,6 +92,113 @@ class AgentClient:
     def complete(self, job_id: str, payload: dict[str, Any]) -> JobDocument:
         path = f"/v1/jobs/{quote(job_id, safe='')}/complete"
         return JobDocument.model_validate(self._post(path, payload))
+
+    def download_job_input(
+        self,
+        job_id: str,
+        worker_id: str,
+        attempt: int,
+        destination: Path,
+        context: HandlerContext,
+    ) -> tuple[str, int]:
+        request = Request(
+            url=f"{self.base_url.rstrip('/')}/v1/jobs/{quote(job_id, safe='')}/input",
+            headers=self._transfer_headers(worker_id, attempt),
+            method="GET",
+        )
+        digest = hashlib.sha256()
+        size = 0
+        temporary = destination.with_suffix(destination.suffix + ".part")
+        temporary.unlink(missing_ok=True)
+        try:
+            with urlopen(
+                request,
+                timeout=max(self.timeout_seconds, 300),
+                context=self._ssl_context(),
+            ) as response, temporary.open("wb") as output:
+                while chunk := response.read(1024 * 1024):
+                    context.check()
+                    output.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+            if size < 1:
+                raise RuntimeError("Agent returned an empty backup source")
+            os.replace(temporary, destination)
+            return digest.hexdigest(), size
+        except (HTTPError, URLError, TimeoutError, OSError) as error:
+            raise RuntimeError(
+                f"Unable to download Agent backup source: {error}"
+            ) from error
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def upload_job_artifact(
+        self,
+        job_id: str,
+        worker_id: str,
+        attempt: int,
+        source: Path,
+        sha256: str,
+        context: HandlerContext,
+    ) -> dict[str, Any]:
+        size = source.stat().st_size
+        headers = self._transfer_headers(worker_id, attempt)
+        headers.update(
+            {
+                "Accept": "application/json",
+                "Content-Length": str(size),
+                "Content-Type": "application/octet-stream",
+                "X-Ohana-SHA256": sha256,
+            }
+        )
+        with source.open("rb") as stream:
+            request = Request(
+                url=(
+                    f"{self.base_url.rstrip('/')}/v1/jobs/"
+                    f"{quote(job_id, safe='')}/artifact"
+                ),
+                data=stream,
+                headers=headers,
+                method="POST",
+            )
+            context.check()
+            try:
+                with urlopen(
+                    request,
+                    timeout=max(self.timeout_seconds, 600),
+                    context=self._ssl_context(),
+                ) as response:
+                    body = response.read()
+            except HTTPError as error:
+                detail = error.read().decode("utf-8", errors="replace")[:1000]
+                raise RuntimeError(
+                    f"Agent rejected backup artifact with HTTP {error.code}: {detail}"
+                ) from error
+            except (URLError, TimeoutError, OSError) as error:
+                raise RuntimeError(
+                    f"Unable to upload backup artifact: {error}"
+                ) from error
+        try:
+            value = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("Agent returned an invalid backup receipt") from error
+        if not isinstance(value, dict):
+            raise RuntimeError("Agent returned a non-object backup receipt")
+        return value
+
+    def _transfer_headers(self, worker_id: str, attempt: int) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "X-Ohana-Attempt": str(attempt),
+            "X-Ohana-Worker-Id": worker_id,
+        }
+
+    def _ssl_context(self) -> ssl.SSLContext | None:
+        if not self.base_url.lower().startswith("https://"):
+            return None
+        if self.ca_certificate_file is None:
+            raise RuntimeError("Katsuyu HTTPS CA certificate is missing")
+        return ssl.create_default_context(cafile=self.ca_certificate_file)
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         request = Request(
@@ -192,6 +301,9 @@ class KatsuyuWorker:
         context = HandlerContext(
             deadline=monotonic() + max(0, remaining_seconds),
             progress_callback=update_progress,
+            job_id=str(job.job_id),
+            worker_id=self.worker_id,
+            attempt=job.attempt,
         )
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="katsuyu-job")
         future: Future[dict[str, Any]] = executor.submit(
@@ -378,18 +490,22 @@ def main() -> None:
         ],
     )
     workspace = KatsuyuWorkspace(arguments.workspace)
-    worker = KatsuyuWorker(
-        client=AgentClient(
+    client = AgentClient(
             arguments.base_url,
             token,
             ca_certificate_file=arguments.ca_file,
-        ),
+        )
+    worker = KatsuyuWorker(
+        client=client,
         worker_id=arguments.worker_id,
         handlers={
             "system.health": SystemHealthHandler(workspace),
             "backup.compress": BackupCompressHandler(workspace),
             "backup.encrypt": BackupEncryptHandler(workspace, arguments.age_binary),
             "backup.verify": BackupVerifyHandler(workspace),
+            "backup.infra": InfraBackupHandler(
+                workspace, client, arguments.age_binary
+            ),
         },
         heartbeat_seconds=arguments.heartbeat_seconds,
         status_store=StatusStore(arguments.status_file),

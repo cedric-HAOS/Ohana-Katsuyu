@@ -2,6 +2,21 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.3.0] — Sauvegarde INFRA-01 déterministe — 2026-08-20
+
+### Ajouté
+
+- `backup.infra` récupère le tar lié au job, le compresse, le chiffre avec
+  `age`, calcule ses SHA-256 et renvoie l'artefact à Agent en flux.
+- Le résultat mesure durée, temps CPU, pic mémoire et volumes logiques d'I/O.
+
+### Sécurité
+
+- Les flux exigent le jeton individuel, le worker propriétaire et la tentative
+  courante ; les paramètres n'acceptent ni commande ni chemin.
+- Tous les fichiers intermédiaires restent dans le workspace protégé et sont
+  supprimés après succès, annulation, timeout ou échec.
+
 ## [0.2.1] — Démarrage Windows à commande courte — 2026-08-20
 
 ### Corrigé
