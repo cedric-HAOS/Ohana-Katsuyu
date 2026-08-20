@@ -5,6 +5,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from ohana_katsuyu import __version__
+
 
 def test_package_is_windows_specific_and_has_bounded_runtime_dependencies() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))[
@@ -12,7 +14,8 @@ def test_package_is_windows_specific_and_has_bounded_runtime_dependencies() -> N
     ]
 
     assert project["name"] == "ohana-katsuyu"
-    assert project["version"] == "0.3.0"
+    assert project["version"] == "0.3.1"
+    assert __version__ == project["version"]
     assert project["dependencies"] == [
         "Pillow>=11,<13",
         "pydantic>=2,<3",

@@ -19,6 +19,7 @@ from ohana_katsuyu.models import (
     JobStatus,
     WorkerDocument,
 )
+from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.worker import (
     AgentClient,
     KatsuyuWorker,
@@ -125,15 +126,30 @@ def test_worker_registers_and_claims_only_its_allowlist() -> None:
     assert client.completions[-1][1]["status"] == "SUCCEEDED"
 
 
-def test_worker_does_nothing_when_no_job_is_available() -> None:
+def test_worker_keeps_local_status_fresh_when_no_job_is_available(
+    tmp_path: Path,
+) -> None:
     client = FakeClient(None)
+    status_store = StatusStore(tmp_path / "status.json")
     worker = KatsuyuWorker(
         client=cast(AgentClient, client),
         worker_id="katsuyu-bubule",
         handlers={"system.health": SuccessHandler()},
+        status_store=status_store,
     )
 
-    assert worker.run_once() is False
+    first = worker.run_once()
+    first_status = status_store.read()
+    second = worker.run_once()
+    second_status = status_store.read()
+
+    assert first is False
+    assert second is False
+    assert first_status.state == "connected"
+    assert second_status.state == "connected"
+    assert first_status.last_connection_at is not None
+    assert second_status.last_connection_at is not None
+    assert second_status.updated_at >= first_status.updated_at
     assert client.completions == []
 
 

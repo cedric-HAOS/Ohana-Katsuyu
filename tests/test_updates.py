@@ -42,7 +42,7 @@ def test_read_latest_release_accepts_only_the_official_stable_release(
         url="https://github.com/cedric-HAOS/Ohana-Katsuyu/releases/tag/v0.2.0",
     )
     assert requests[0][1] == 3
-    assert requests[0][0].get_header("User-agent") == "Ohana-Katsuyu/0.3.0"
+    assert requests[0][0].get_header("User-agent") == "Ohana-Katsuyu/0.3.1"
 
 
 @pytest.mark.parametrize(

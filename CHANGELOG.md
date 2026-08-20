@@ -2,6 +2,16 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.3.1] — État de connexion fiable — 2026-08-20
+
+### Corrigé
+
+- Chaque interrogation réussie d'Agent rafraîchit maintenant l'état local,
+  même lorsqu'aucun job n'est disponible ; l'icône reste donc en couleurs
+  pendant les périodes d'inactivité normales.
+- L'infobulle distingue explicitement un worker connecté, arrêté, en erreur ou
+  dont l'état local est périmé.
+
 ## [0.3.0] — Sauvegarde INFRA-01 déterministe — 2026-08-20
 
 ### Ajouté

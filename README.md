@@ -74,9 +74,11 @@ réutilise l’icône officielle Ohana :
 - icône barrée : Agent inaccessible ou erreur ;
 - icône grise : worker arrêté ou état local devenu trop ancien.
 
-L’infobulle contient uniquement la version, la dernière connexion et le type
-du job courant. Le menu permet d’afficher cet état ou d’ouvrir le dossier des
-logs. Il ne peut ni lancer, ni annuler, ni valider une opération.
+L’infobulle contient uniquement la version, l'état de connexion explicite, la
+dernière connexion et le type du job courant. Chaque interrogation réussie
+d'Agent rafraîchit cet état, même lorsqu'aucun job n'est disponible. Le menu
+permet d’afficher cet état ou d’ouvrir le dossier des logs. Il ne peut ni
+lancer, ni annuler, ni valider une opération.
 
 ## Protocole et sécurité
 

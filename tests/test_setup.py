@@ -140,7 +140,7 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
 
     assert stopped == [True]
     assert registrations[0][0] == "existing-token"
-    assert registrations[0][1]["worker_version"] == "0.3.0"
+    assert registrations[0][1]["worker_version"] == "0.3.1"
     assert (state / "status.json").read_text(encoding="utf-8") == (
         '{"state":"connected"}'
     )

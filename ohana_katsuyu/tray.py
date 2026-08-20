@@ -71,6 +71,16 @@ def effective_state(status: LocalStatus) -> str:
 def tooltip(status: LocalStatus) -> str:
     connection = status.last_connection_at or "jamais"
     job = status.current_job_type or "aucun"
+    state = effective_state(status)
+    if state == "stopped" and status.state in {"connected", "running", "error"}:
+        state_label = "état périmé"
+    else:
+        state_label = {
+            "connected": "connecté",
+            "running": "job en cours",
+            "error": "Agent inaccessible",
+            "stopped": "arrêté",
+        }[state]
     if status.update_state == "available" and status.latest_version:
         update = f"mise à jour {status.latest_version} disponible"
     elif status.update_state == "current":
@@ -80,7 +90,8 @@ def tooltip(status: LocalStatus) -> str:
     else:
         update = "version non vérifiée"
     return (
-        f"Katsuyu {status.version} · {update} · connexion {connection} · job {job}"
+        f"Katsuyu {status.version} · {update} · {state_label} · "
+        f"connexion {connection} · job {job}"
     )[:127]
 
 

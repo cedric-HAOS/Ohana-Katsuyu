@@ -274,6 +274,7 @@ class KatsuyuWorker:
         )
         job = self.client.claim(claim.model_dump(mode="json")).job
         if job is None:
+            self._publish_connected_status()
             return False
         if self.status_store is not None:
             self.status_store.write(
