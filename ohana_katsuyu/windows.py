@@ -85,17 +85,19 @@ def install(arguments: argparse.Namespace) -> None:
         raise RuntimeError(
             f"worker CA certificate is missing or empty: {arguments.ca_file}"
         )
+    if not arguments.config_file.is_file() or arguments.config_file.stat().st_size == 0:
+        raise RuntimeError(
+            f"worker configuration is missing or empty: {arguments.config_file}"
+        )
     if arguments.age_binary.is_absolute():
         if not arguments.age_binary.is_file():
             raise RuntimeError(f"age executable not found: {arguments.age_binary}")
-        age_binary = arguments.age_binary.resolve()
     else:
         discovered_age = shutil.which(str(arguments.age_binary))
         if discovered_age is None:
             raise RuntimeError(
                 f"age executable not found in PATH: {arguments.age_binary}"
             )
-        age_binary = Path(discovered_age).resolve()
     arguments.workspace.mkdir(parents=True, exist_ok=True)
     arguments.log_file.parent.mkdir(parents=True, exist_ok=True)
     worker = (
@@ -106,22 +108,8 @@ def install(arguments: argparse.Namespace) -> None:
     command = subprocess.list2cmdline(
         [
             str(worker),
-            "--base-url",
-            arguments.base_url,
-            "--token-file",
-            str(arguments.token_file.resolve()),
-            "--ca-file",
-            str(arguments.ca_file.resolve()),
-            "--workspace",
-            str(arguments.workspace.resolve()),
-            "--log-file",
-            str(arguments.log_file.resolve()),
-            "--status-file",
-            str(arguments.status_file.resolve()),
-            "--age-binary",
-            str(age_binary),
-            "--worker-id",
-            arguments.worker_id,
+            "--config-file",
+            str(arguments.config_file.resolve()),
         ]
     )
     _run_schtasks(
@@ -170,6 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="operation", required=True)
     install_parser = subparsers.add_parser("install")
     install_parser.add_argument("--base-url", required=True)
+    install_parser.add_argument("--config-file", type=Path, required=True)
     install_parser.add_argument(
         "--token-file", type=Path, default=root / "katsuyu.token"
     )

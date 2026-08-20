@@ -15,6 +15,8 @@ def test_install_creates_only_the_expected_system_task(
     token.write_text("worker-secret", encoding="utf-8")
     ca_file = tmp_path / "agent-ca.pem"
     ca_file.write_text("public certificate", encoding="utf-8")
+    config_file = tmp_path / "config.json"
+    config_file.write_text("{}", encoding="utf-8")
     age_binary = tmp_path / "age.exe"
     age_binary.write_bytes(b"test executable")
     monkeypatch.setattr(
@@ -39,6 +41,8 @@ def test_install_creates_only_the_expected_system_task(
             "install",
             "--base-url",
             "https://infra-01.ohana.lan:8766",
+            "--config-file",
+            str(config_file),
             "--token-file",
             str(token),
             "--ca-file",
@@ -67,6 +71,10 @@ def test_install_creates_only_the_expected_system_task(
         "HIGHEST",
     ]
     assert commands[0][commands[0].index("/TN") + 1] == "Ohana-Katsuyu"
+    task_command = commands[0][commands[0].index("/TR") + 1]
+    assert "--config-file" in task_command
+    assert "--token-file" not in task_command
+    assert len(task_command) <= 261
     assert "KatsuyuTray.exe" in tray_commands[0]
 
 

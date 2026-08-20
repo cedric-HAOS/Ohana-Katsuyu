@@ -314,20 +314,25 @@ def install(
     elif existing is not None and existing.ca_file != ca_file:
         assert existing.ca_file is not None
         shutil.copy2(existing.ca_file, ca_file)
+    status_file = state_root / "status.json"
+    log_file = logs / "katsuyu.log"
     config_file = state_root / "config.json"
     config_file.write_text(
         json.dumps(
             {
                 "base_url": base_url,
                 "worker_id": worker_id,
+                "token_file": str(token_file),
                 "ca_file": str(ca_file),
+                "workspace": str(workspace),
+                "log_file": str(log_file),
+                "status_file": str(status_file),
+                "age_binary": str(binary_root / "age.exe"),
             },
             separators=(",", ":"),
         ),
         encoding="utf-8",
     )
-    status_file = state_root / "status.json"
-    log_file = logs / "katsuyu.log"
     if not status_file.exists():
         status_file.write_text("{}", encoding="utf-8")
     log_file.touch(exist_ok=True)
@@ -356,6 +361,8 @@ def install(
             "install",
             "--base-url",
             base_url,
+            "--config-file",
+            str(config_file),
             "--token-file",
             str(token_file),
             "--ca-file",

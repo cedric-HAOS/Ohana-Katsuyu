@@ -2,6 +2,16 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.2.1] — Démarrage Windows à commande courte — 2026-08-20
+
+### Corrigé
+
+- La tâche de démarrage ne sérialise plus tous les chemins et paramètres dans
+  `/TR`, limité à 261 caractères par Windows Task Scheduler.
+- Le worker lit désormais les paramètres bornés depuis le `config.json`
+  sécurisé déjà produit par l'installateur ; la tâche ne transmet que son
+  chemin avec `--config-file`.
+
 ## [0.2.0] — Appairage HTTPS épinglé — 2026-08-20
 
 ### Ajouté

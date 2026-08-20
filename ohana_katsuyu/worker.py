@@ -300,7 +300,8 @@ def _default_root() -> Path:
 def build_parser() -> argparse.ArgumentParser:
     root = _default_root()
     parser = argparse.ArgumentParser(description="Ohana Katsuyu worker")
-    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--config-file", type=Path)
+    parser.add_argument("--base-url")
     parser.add_argument("--ca-file", type=Path)
     parser.add_argument("--token-file", type=Path, default=root / "katsuyu.token")
     parser.add_argument("--workspace", type=Path, default=root / "workspace")
@@ -314,10 +315,44 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def apply_configuration(arguments: argparse.Namespace) -> None:
+    """Load the bounded worker settings written by KatsuyuSetup."""
+    if arguments.config_file is None:
+        return
+    try:
+        document = json.loads(arguments.config_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"Unable to read worker configuration: {error}") from error
+    if not isinstance(document, dict):
+        raise SystemExit("Worker configuration must be a JSON object")
+    string_fields = ("base_url", "worker_id")
+    path_fields = (
+        "token_file",
+        "ca_file",
+        "workspace",
+        "log_file",
+        "status_file",
+        "age_binary",
+    )
+    for field in string_fields:
+        value = document.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise SystemExit(f"Worker configuration field {field} is missing")
+        setattr(arguments, field, value.strip())
+    for field in path_fields:
+        value = document.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise SystemExit(f"Worker configuration field {field} is missing")
+        setattr(arguments, field, Path(value))
+
+
 def main() -> None:
     arguments = build_parser().parse_args()
+    apply_configuration(arguments)
     if arguments.poll_seconds <= 0 or arguments.heartbeat_seconds <= 0:
         raise SystemExit("poll and heartbeat delays must be greater than zero")
+    if arguments.base_url is None:
+        raise SystemExit("Katsuyu Agent URL is missing")
     if not arguments.base_url.lower().startswith("https://"):
         raise SystemExit("Katsuyu requires an HTTPS Agent URL")
     if arguments.ca_file is None or not arguments.ca_file.is_file():

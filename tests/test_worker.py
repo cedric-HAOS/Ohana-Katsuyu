@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from time import sleep
 from typing import Any, cast
@@ -14,7 +15,42 @@ from ohana_katsuyu.models import (
     JobStatus,
     WorkerDocument,
 )
-from ohana_katsuyu.worker import AgentClient, KatsuyuWorker
+from ohana_katsuyu.worker import (
+    AgentClient,
+    KatsuyuWorker,
+    apply_configuration,
+    build_parser,
+)
+
+
+def test_worker_loads_bounded_setup_configuration(tmp_path) -> None:
+    paths = {
+        "token_file": tmp_path / "katsuyu.token",
+        "ca_file": tmp_path / "agent-ca.pem",
+        "workspace": tmp_path / "workspace",
+        "log_file": tmp_path / "logs" / "katsuyu.log",
+        "status_file": tmp_path / "status.json",
+        "age_binary": tmp_path / "age.exe",
+    }
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "base_url": "https://infra-01.ohana.lan:8766",
+                "worker_id": "katsuyu-Bubule",
+                **{name: str(path) for name, path in paths.items()},
+            }
+        ),
+        encoding="utf-8",
+    )
+    arguments = build_parser().parse_args(["--config-file", str(config)])
+
+    apply_configuration(arguments)
+
+    assert arguments.base_url == "https://infra-01.ohana.lan:8766"
+    assert arguments.worker_id == "katsuyu-Bubule"
+    for name, path in paths.items():
+        assert getattr(arguments, name) == path
 
 
 def job_document() -> JobDocument:
