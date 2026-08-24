@@ -26,6 +26,7 @@ from ohana_katsuyu.handlers import (
     LogsInvestigateHandler,
     SystemHealthHandler,
     SystemMetrics,
+    _signature,
 )
 
 
@@ -73,7 +74,15 @@ def test_logs_health_check_groups_and_compares_without_llm(monkeypatch) -> None:
             "window_started_at": "2026-08-24T00:00:00+00:00",
             "window_ended_at": "2026-08-25T00:00:00+00:00",
             "max_bytes_per_source": 4096,
-            "baseline": [],
+            "baseline": [
+                {
+                    "source": "zwave-01",
+                    "signature": _signature(
+                        "2026-08-24T09:00:00+00:00 ERROR Node 17 transmission failed"
+                    ),
+                    "occurrences": 1,
+                }
+            ],
             "incident_id": None,
         },
         _log_context(),
@@ -82,8 +91,10 @@ def test_logs_health_check_groups_and_compares_without_llm(monkeypatch) -> None:
     assert result["status"] == "KO"
     assert result["sources"][0]["analyzed_lines"] == 3
     assert result["sources"][0]["findings"][0]["occurrences"] == 2
+    assert result["sources"][0]["findings"][0]["reference_occurrences"] == 1
     assert result["sources"][0]["findings"][0]["category"] == "zwave"
-    assert result["new_anomaly_count"] == 1
+    assert result["sources"][0]["findings"][0]["trend"] == "known"
+    assert result["new_anomaly_count"] == 0
 
 
 def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:

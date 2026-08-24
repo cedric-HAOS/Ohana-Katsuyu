@@ -27,7 +27,9 @@ applies only to the bounded interval and must not claim permanent health. Keep
 the answer concise. Every explanation of a cause must stay in hypotheses and
 must include supporting and contradicting evidence plus calibrated confidence.
 Never present a hypothesis as a confirmed fact. Never execute or authorize an
-action; recommended investigations are proposals for Tsunade to decide."""
+action; recommended investigations are proposals for Tsunade to decide.
+Write every user-facing field in French, including interpretations, summaries,
+evidence, hypotheses, possible causes, missing context and investigations."""
 
 DIAGNOSTIC_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -308,9 +310,10 @@ class AiInferenceHandler:
                     if isinstance(text, str):
                         content.append(text)
         except urllib.error.HTTPError as error:
-            error.read(500)
+            detail = error.read(500).decode("utf-8", errors="replace").strip()
+            suffix = f": {detail}" if detail else ""
             raise RuntimeError(
-                f"local AI runtime rejected inference: HTTP {error.code}"
+                f"local AI runtime rejected inference: HTTP {error.code}{suffix}"
             ) from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError(f"local AI inference failed: {error}") from error

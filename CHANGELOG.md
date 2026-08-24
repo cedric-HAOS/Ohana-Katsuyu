@@ -2,6 +2,22 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.6.1] — Synthèses françaises et références de journaux — 2026-08-24
+
+### Modifié
+
+- La documentation formalise Katsuyu comme worker lourd sous le contrôle
+  technique d’Agent, coordonné par Tsunade et vérifié par Shikamaru.
+- Le contrôle déterministe renvoie désormais, pour chaque anomalie connue, le
+  nombre d’occurrences de référence utilisé pour calculer son évolution.
+
+### Corrigé
+
+- Le moteur local reçoit désormais l’instruction explicite de produire tous les
+  champs destinés à l’utilisateur en français.
+- Une réponse HTTP d’erreur du runtime IA conserve un extrait borné de son corps
+  afin que Tsunade puisse diagnostiquer précisément un rejet HTTP 400.
+
 ## [0.6.0] — Analyse IA avancée pour Tsunade — 2026-08-24
 
 ### Ajouté

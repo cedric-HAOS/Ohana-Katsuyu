@@ -527,6 +527,7 @@ class LogsHealthCheckHandler:
                     severity=_severity(sample),
                     summary=f"{signature} ({occurrences} occurrence(s))",
                     occurrences=occurrences,
+                    reference_occurrences=previous,
                     first_at=min(observed) if observed else None,
                     last_at=max(observed) if observed else None,
                     trend=trend,

@@ -4,6 +4,11 @@ Ohana-Katsuyu est le worker Windows déterministe exécuté sur Bubule. Il reço
 uniquement des jobs explicitement autorisés par Ohana-Agent/Tsunade et ne peut
 ni créer un job, ni administrer Agent, ni exécuter une commande arbitraire.
 
+Katsuyu est à la fois le nom fonctionnel du worker lourd et son identité
+technique. Ohana-Agent reste le runtime de contrôle : Tsunade coordonne et
+propose, Agent autorise, Katsuyu exécute un handler déclaré, puis Shikamaru
+vérifie l'état observé.
+
 ## Capacités du MVP
 
 - `system.health` mesure CPU, mémoire et espace disque de Bubule ;

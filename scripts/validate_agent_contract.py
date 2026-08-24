@@ -77,9 +77,7 @@ def main() -> None:
             assert server.address is not None
             host, port = server.address
             worker = KatsuyuWorker(
-                client=AgentClient(
-                    f"http://{host}:{port}", "katsuyu-contract-secret"
-                ),
+                client=AgentClient(f"http://{host}:{port}", "katsuyu-contract-secret"),
                 worker_id="katsuyu-bubule",
                 handlers={"system.health": ContractHealthHandler()},
                 heartbeat_seconds=0.1,
