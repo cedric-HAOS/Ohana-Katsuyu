@@ -13,9 +13,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
-from tkinter import Button, Entry, Label, StringVar, Tk, messagebox
+from tkinter import (
+    BooleanVar,
+    Button,
+    Checkbutton,
+    Entry,
+    Label,
+    StringVar,
+    Tk,
+    messagebox,
+)
 
 from ohana_katsuyu import __version__
+from ohana_katsuyu.ai_install import AiInstallation, provision_ai
 from ohana_katsuyu.handlers import HANDLER_TYPES
 from ohana_katsuyu.pairing import (
     PairingClient,
@@ -39,6 +49,7 @@ class ExistingInstallation:
     worker_id: str
     token: str
     ca_file: Path | None = None
+    ai: AiInstallation | None = None
 
 
 def program_root() -> Path:
@@ -55,6 +66,13 @@ def payload_root() -> Path:
     if frozen_root:
         return Path(frozen_root) / "payload"
     return Path(__file__).resolve().parents[1] / "dist" / "payload"
+
+
+def format_download_progress(name: str, received: int, total: int) -> str:
+    percent = received * 100 / total if total else 0
+    received_gib = received / (1024**3)
+    total_gib = total / (1024**3)
+    return f"{name} : {percent:.1f} % ({received_gib:.2f}/{total_gib:.2f} Gio)"
 
 
 def require_administrator() -> None:
@@ -188,7 +206,27 @@ def read_existing_installation() -> ExistingInstallation | None:
         if isinstance(configured_ca_file, str) and configured_ca_file.strip()
         else None
     )
-    return ExistingInstallation(normalized_url, worker_id, token, ca_file)
+    ai_values = {
+        "runtime": value.get("ai_runtime"),
+        "model": value.get("ai_model"),
+        "model_id": value.get("ai_model_id"),
+        "model_sha256": value.get("ai_model_sha256"),
+        "context_size": value.get("ai_context_size"),
+    }
+    ai = None
+    if all(item is not None for item in ai_values.values()):
+        if all(
+            isinstance(ai_values[name], str) and ai_values[name].strip()
+            for name in ("runtime", "model", "model_id", "model_sha256")
+        ) and isinstance(ai_values["context_size"], int):
+            ai = AiInstallation(
+                runtime=Path(ai_values["runtime"]),
+                model=Path(ai_values["model"]),
+                model_id=ai_values["model_id"],
+                model_sha256=ai_values["model_sha256"],
+                context_size=ai_values["context_size"],
+            )
+    return ExistingInstallation(normalized_url, worker_id, token, ca_file, ai)
 
 
 def stop_running_components() -> None:
@@ -196,6 +234,7 @@ def stop_running_components() -> None:
         ["schtasks.exe", "/End", "/TN", "Ohana-Katsuyu"],
         ["taskkill.exe", "/F", "/IM", "KatsuyuWorker.exe"],
         ["taskkill.exe", "/F", "/IM", "KatsuyuTray.exe"],
+        ["taskkill.exe", "/F", "/IM", "KatsuyuAiServer.exe"],
     ):
         subprocess.run(  # noqa: S603
             command,
@@ -256,6 +295,9 @@ def restore_payload(
 def install(
     agent_address: str,
     on_code: Callable[[str, str], None] | None = None,
+    *,
+    install_ai: bool = False,
+    on_progress: Callable[[str, int, int], None] | None = None,
 ) -> None:
     require_administrator()
     current_installed_version = installed_version()
@@ -274,12 +316,16 @@ def install(
         and existing.ca_file is not None
         and existing.ca_file.is_file()
     )
+    enable_ai = install_ai or (existing is not None and existing.ai is not None)
+    capabilities = [*HANDLER_TYPES]
+    if enable_ai:
+        capabilities.append("ai.inference")
     pairing_client = None
     if not secure_existing:
         base_url = normalize_agent_url(agent_address)
         worker_id = default_worker_id()
         pairing_client = PairingClient.bootstrap(base_url)
-        session = pairing_client.create(worker_id, sorted(HANDLER_TYPES))
+        session = pairing_client.create(worker_id, sorted(capabilities))
         if on_code is not None:
             on_code(
                 session.verification_code,
@@ -306,6 +352,8 @@ def install(
     for directory in (binary_root, logs, workspace):
         directory.mkdir(parents=True, exist_ok=True)
 
+    ai = provision_ai(state_root, on_progress) if enable_ai else None
+
     token_file = state_root / "katsuyu.token"
     token_file.write_text(token, encoding="utf-8")
     ca_file = state_root / "agent-ca.pem"
@@ -317,37 +365,47 @@ def install(
     status_file = state_root / "status.json"
     log_file = logs / "katsuyu.log"
     config_file = state_root / "config.json"
-    config_file.write_text(
-        json.dumps(
+    configuration = {
+        "base_url": base_url,
+        "worker_id": worker_id,
+        "token_file": str(token_file),
+        "ca_file": str(ca_file),
+        "workspace": str(workspace),
+        "log_file": str(log_file),
+        "status_file": str(status_file),
+        "age_binary": str(binary_root / "age.exe"),
+    }
+    if ai is not None:
+        configuration.update(
             {
-                "base_url": base_url,
-                "worker_id": worker_id,
-                "token_file": str(token_file),
-                "ca_file": str(ca_file),
-                "workspace": str(workspace),
-                "log_file": str(log_file),
-                "status_file": str(status_file),
-                "age_binary": str(binary_root / "age.exe"),
-            },
-            separators=(",", ":"),
-        ),
-        encoding="utf-8",
+                "ai_runtime": str(ai.runtime),
+                "ai_model": str(ai.model),
+                "ai_model_id": ai.model_id,
+                "ai_model_sha256": ai.model_sha256,
+                "ai_context_size": ai.context_size,
+            }
+        )
+    config_file.write_text(
+        json.dumps(configuration, separators=(",", ":")), encoding="utf-8"
     )
     if not status_file.exists():
         status_file.write_text("{}", encoding="utf-8")
     log_file.touch(exist_ok=True)
+    private_directories = [workspace]
+    if ai is not None:
+        private_directories.append(state_root / "ai")
     secure_paths(
         state_root,
         token_file,
         [ca_file, config_file, status_file, log_file],
-        [workspace],
+        private_directories,
     )
 
     AgentClient(base_url, token, ca_certificate_file=ca_file).register(
         {
             "protocol_version": 1,
             "worker_id": worker_id,
-            "capabilities": sorted(HANDLER_TYPES),
+            "capabilities": sorted(capabilities),
             "platform": "Windows",
             "worker_version": __version__,
         }
@@ -410,6 +468,7 @@ def install(
 def uninstall() -> str:
     require_administrator()
     uninstall_windows_startup(build_windows_parser().parse_args(["uninstall"]))
+    stop_running_components()
     import winreg
 
     try:
@@ -438,6 +497,11 @@ def uninstall() -> str:
             child.unlink(missing_ok=True)
     for name in ("katsuyu.token", "agent-ca.pem", "config.json", "status.json"):
         (data_root() / name).unlink(missing_ok=True)
+    ai_root = (data_root() / "ai").resolve()
+    if ai_root.exists():
+        if not ai_root.is_relative_to(data_root().resolve()):
+            raise RuntimeError("Le répertoire IA sort du répertoire Katsuyu.")
+        shutil.rmtree(ai_root)
     move_file_delay_until_reboot = 4
     ctypes.windll.kernel32.MoveFileExW(
         str(current_executable), None, move_file_delay_until_reboot
@@ -455,12 +519,12 @@ class InstallerWindow:
     def __init__(self) -> None:
         self.root = Tk()
         self.root.title("Installation d’Ohana Katsuyu")
-        self.root.geometry("520x260")
+        self.root.geometry("520x310")
         existing = read_existing_installation()
         address = (
             existing.base_url
             if existing is not None
-            else "http://infra-01.ohana.lan:8765"
+            else "https://infra-01.ohana.lan:8766"
         )
         self.address = StringVar(value=address)
         self.status = StringVar(
@@ -470,6 +534,8 @@ class InstallerWindow:
                 else "Saisissez uniquement l’adresse d’Ohana-Agent."
             )
         )
+        self.install_ai = BooleanVar(value=True)
+        self.ai_locked = existing is not None and existing.ai is not None
         Label(self.root, text="Adresse d’Ohana-Agent").pack(pady=(24, 4))
         self.entry = Entry(self.root, textvariable=self.address, width=55)
         self.entry.pack(pady=4)
@@ -485,6 +551,14 @@ class InstallerWindow:
             wraplength=470,
         )
         self.fingerprint.pack(pady=(0, 8))
+        self.ai_option = Checkbutton(
+            self.root,
+            text="Installer l’IA locale (téléchargement d’environ 8,3 Go)",
+            variable=self.install_ai,
+        )
+        self.ai_option.pack(pady=(0, 4))
+        if self.ai_locked:
+            self.ai_option.configure(state="disabled")
         Label(self.root, textvariable=self.status, wraplength=470).pack(pady=4)
         action = (
             "Mettre à jour Katsuyu" if existing is not None else "Installer Katsuyu"
@@ -494,12 +568,19 @@ class InstallerWindow:
 
     def start(self) -> None:
         self.button.configure(state="disabled")
+        self.ai_option.configure(state="disabled")
+        self.install_ai_selected = bool(self.install_ai.get())
         self.status.set("Connexion à Agent…")
         Thread(target=self._install, daemon=True).start()
 
     def _install(self) -> None:
         try:
-            install(self.address.get(), self._show_code)
+            install(
+                self.address.get(),
+                self._show_code,
+                install_ai=self.install_ai_selected,
+                on_progress=self._show_progress,
+            )
         except Exception as error:  # noqa: BLE001
             detail = str(error)
             self.root.after(0, lambda: self._failed(detail))
@@ -520,8 +601,14 @@ class InstallerWindow:
             ),
         )
 
+    def _show_progress(self, name: str, received: int, total: int) -> None:
+        detail = format_download_progress(name, received, total)
+        self.root.after(0, lambda: self.status.set(detail))
+
     def _failed(self, detail: str) -> None:
         self.button.configure(state="normal")
+        if not self.ai_locked:
+            self.ai_option.configure(state="normal")
         self.status.set(detail)
         messagebox.showerror(PRODUCT_NAME, detail)
 

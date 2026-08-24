@@ -9,6 +9,13 @@ from typing import Any
 import pytest
 
 from ohana_katsuyu import setup
+from ohana_katsuyu.ai_install import AiInstallation
+
+
+def test_download_progress_is_clear_and_bounded() -> None:
+    assert setup.format_download_progress("model.gguf", 1024**3, 2 * 1024**3) == (
+        "model.gguf : 50.0 % (1.00/2.00 Gio)"
+    )
 
 
 def test_existing_installation_reuses_private_identity(
@@ -34,6 +41,63 @@ def test_existing_installation_reuses_private_identity(
     assert existing == setup.ExistingInstallation(
         "https://infra-01.ohana.lan:8766", "bubule", "secret", ca_file
     )
+
+
+def test_existing_installation_preserves_complete_ai_configuration(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(setup, "data_root", lambda: tmp_path)
+    (tmp_path / "katsuyu.token").write_text("secret", encoding="utf-8")
+    ca_file = tmp_path / "agent-ca.pem"
+    ca_file.write_text("public certificate", encoding="utf-8")
+    runtime = tmp_path / "ai" / "runtime" / "KatsuyuAiServer.exe"
+    model = tmp_path / "ai" / "models" / "model.gguf"
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "base_url": "https://infra-01.ohana.lan:8766",
+                "worker_id": "bubule",
+                "ca_file": str(ca_file),
+                "ai_runtime": str(runtime),
+                "ai_model": str(model),
+                "ai_model_id": "pinned-model",
+                "ai_model_sha256": "a" * 64,
+                "ai_context_size": 8192,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    existing = setup.read_existing_installation()
+
+    assert existing is not None
+    assert existing.ai == AiInstallation(runtime, model, "pinned-model", "a" * 64, 8192)
+
+
+def test_partial_ai_configuration_does_not_discard_worker_identity(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(setup, "data_root", lambda: tmp_path)
+    (tmp_path / "katsuyu.token").write_text("secret", encoding="utf-8")
+    ca_file = tmp_path / "agent-ca.pem"
+    ca_file.write_text("public certificate", encoding="utf-8")
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "base_url": "https://infra-01.ohana.lan:8766",
+                "worker_id": "bubule",
+                "ca_file": str(ca_file),
+                "ai_model": "incomplete.gguf",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    existing = setup.read_existing_installation()
+
+    assert existing is not None
+    assert existing.token == "secret"
+    assert existing.ai is None
 
 
 def test_replace_payload_keeps_a_rollback_copy(
@@ -70,7 +134,7 @@ def test_installer_refuses_to_downgrade_existing_katsuyu(
     monkeypatch: Any,
 ) -> None:
     monkeypatch.setattr(setup, "require_administrator", lambda: None)
-    monkeypatch.setattr(setup, "installed_version", lambda: "0.4.0")
+    monkeypatch.setattr(setup, "installed_version", lambda: "0.5.0")
 
     with pytest.raises(RuntimeError, match="plus récente"):
         setup.install("infra-01.ohana.lan")
@@ -140,9 +204,68 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
 
     assert stopped == [True]
     assert registrations[0][0] == "existing-token"
-    assert registrations[0][1]["worker_version"] == "0.3.1"
+    assert registrations[0][1]["worker_version"] == "0.4.0"
     assert (state / "status.json").read_text(encoding="utf-8") == (
         '{"state":"connected"}'
     )
     assert (program / "KatsuyuWorker.exe").read_bytes() == (b"new-KatsuyuWorker.exe")
     assert not (state / "update-backup").exists()
+
+
+def test_upgrade_can_provision_and_advertise_optional_ai(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    payload = tmp_path / "payload"
+    program = tmp_path / "program"
+    state = tmp_path / "state"
+    payload.mkdir()
+    program.mkdir()
+    state.mkdir()
+    required = ["KatsuyuWorker.exe", "KatsuyuTray.exe", "age.exe", "age-LICENSE.txt"]
+    for name in required:
+        (payload / name).write_bytes(name.encode())
+    setup_source = tmp_path / "KatsuyuSetup.exe"
+    setup_source.write_bytes(b"setup")
+    ca_file = state / "agent-ca.pem"
+    ca_file.write_text("public certificate", encoding="utf-8")
+    existing = setup.ExistingInstallation(
+        "https://infra-01.ohana.lan:8766", "bubule", "token", ca_file
+    )
+    ai = AiInstallation(
+        state / "ai" / "runtime" / "KatsuyuAiServer.exe",
+        state / "ai" / "models" / "model.gguf",
+        "pinned-model",
+        "b" * 64,
+        8192,
+    )
+    registrations: list[dict[str, object]] = []
+
+    class FakeAgentClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def register(self, document: dict[str, object]) -> None:
+            registrations.append(document)
+
+    monkeypatch.setattr(setup, "require_administrator", lambda: None)
+    monkeypatch.setattr(setup, "installed_version", lambda: "0.3.1")
+    monkeypatch.setattr(setup, "read_existing_installation", lambda: existing)
+    monkeypatch.setattr(setup, "payload_root", lambda: payload)
+    monkeypatch.setattr(setup, "program_root", lambda: program)
+    monkeypatch.setattr(setup, "data_root", lambda: state)
+    monkeypatch.setattr(setup.sys, "executable", str(setup_source))
+    monkeypatch.setattr(setup, "provision_ai", lambda *_args: ai)
+    monkeypatch.setattr(setup, "secure_paths", lambda *_args: None)
+    monkeypatch.setattr(setup, "AgentClient", FakeAgentClient)
+    monkeypatch.setattr(setup, "stop_running_components", lambda: None)
+    monkeypatch.setattr(setup, "install_windows_startup", lambda _args: None)
+    monkeypatch.setattr(setup, "register_uninstaller", lambda _path: None)
+    monkeypatch.setattr(setup, "_run_checked", lambda _command: None)
+    monkeypatch.setattr(setup.subprocess, "Popen", lambda *_args, **_kwargs: None)
+
+    setup.install("ignored.example", install_ai=True)
+
+    configuration = json.loads((state / "config.json").read_text(encoding="utf-8"))
+    assert configuration["ai_runtime"] == str(ai.runtime)
+    assert configuration["ai_model_sha256"] == "b" * 64
+    assert "ai.inference" in registrations[0]["capabilities"]

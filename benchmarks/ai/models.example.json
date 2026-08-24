@@ -1,0 +1,11 @@
+{
+  "models": [
+    {
+      "id": "example-q4",
+      "path": "C:/models/example-q4.gguf",
+      "context_size": 16384,
+      "gpu_layers": 999,
+      "extra_args": []
+    }
+  ]
+}

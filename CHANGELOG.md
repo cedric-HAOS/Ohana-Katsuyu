@@ -2,6 +2,28 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.4.0] — Inférence locale optionnelle — 2026-08-24
+
+### Ajouté
+
+- Le handler `ai.inference` démarre un modèle local épinglé uniquement pendant
+  le job et retourne un diagnostic strict `OK`, `KO` ou
+  `INSUFFICIENT_CONTEXT` sans exécuter d'outil.
+- `KatsuyuSetup.exe` propose l'installation de l'IA locale, télécharge de façon
+  reprenable le runtime CUDA et le modèle retenu, puis vérifie leurs tailles et
+  SHA-256 avant activation.
+- Le benchmark reproductible compare qualité, JSON structuré, outils déclaratifs,
+  hallucinations, contextes insuffisants, VRAM, RAM, débit et latence.
+
+### Sécurité
+
+- Le moteur écoute uniquement sur `127.0.0.1`, reste absent au repos et ne peut
+  choisir ni exécutable, ni modèle, ni schéma, ni commande depuis un job.
+- Les archives sont extraites dans un répertoire transitoire confiné ; les
+  traversées de chemin et liens symboliques sont refusés.
+- Le modèle et le runtime restent protégés par les ACL de Katsuyu. Une mise à
+  jour conserve le modèle vérifié et une désinstallation le supprime.
+
 ## [0.3.1] — État de connexion fiable — 2026-08-20
 
 ### Corrigé

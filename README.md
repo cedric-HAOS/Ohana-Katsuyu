@@ -17,6 +17,30 @@ Katsuyu fonctionne sans LLM. Tous les chemins de jobs sont relatifs à
 `C:\ProgramData\Ohana\Katsuyu\workspace`. Les chemins absolus, traversées `..`,
 liens symboliques et fichiers non réguliers sont refusés.
 
+## IA locale optionnelle
+
+La capacité `ai.inference` est annoncée uniquement lorsque le runtime et le
+modèle local sont configurés. Agent continue de fonctionner normalement sans
+elle. Le profil retenu après benchmark sur Bubule est
+`Ministral-3-14B-Reasoning-2512` en `Q4_K_M`, exécuté par `llama.cpp` en CUDA.
+
+Le moteur écoute exclusivement sur une boucle locale et n'est démarré que pour
+la durée du job. Il est arrêté après succès, échec, annulation ou timeout ; il
+n'occupe donc ni VRAM ni RAM lorsqu'aucun incident n'est actif. Le job ne peut
+choisir ni modèle, ni exécutable, ni schéma, ni outil. Il reçoit au plus 48 000
+caractères de preuves bornées et retourne uniquement `OK`, `KO` ou
+`INSUFFICIENT_CONTEXT`, avec constats, contexte manquant, investigation
+recommandée et métriques.
+
+Le modèle n'exécute aucune recommandation. Les appels d'outils ont été évalués
+pendant le benchmark, mais ne sont pas activés dans le handler : Tsunade doit
+autoriser séparément toute investigation et la faire exécuter par un handler
+déclaré. Le SHA-256 du modèle est vérifié avant sa première utilisation.
+
+Les options locales sont `ai_runtime`, `ai_model`, `ai_model_id`,
+`ai_model_sha256` et `ai_context_size` dans `config.json`. Si une partie de ce
+groupe est absente, Katsuyu démarre sans annoncer `ai.inference`.
+
 ## Installation Windows
 
 L’utilisateur lance uniquement `KatsuyuSetup.exe` en administrateur. Aucun
@@ -29,7 +53,10 @@ Python ni `age` ne doit être installé séparément. L’installateur :
    **Vision > Workers Katsuyu** ;
 4. attend l’autorisation explicite dans Vision puis récupère un jeton worker
    individuel, une seule fois ;
-5. installe le runtime autonome, `age.exe` et sa licence ;
+5. installe le runtime autonome, `age.exe` et sa licence ; si l'option IA est
+   cochée, télécharge directement les composants épinglés (environ 8,3 Gio pour
+   le modèle, plus environ 0,5 Gio pour le runtime CUDA), avec reprise et
+   contrôle SHA-256 avant activation ;
 6. protège le jeton, le certificat public et le workspace par ACL ;
 7. teste un véritable enregistrement worker auprès d’Agent ;
 8. crée la tâche de démarrage sous `SYSTEM`, lance le worker et installe
@@ -42,13 +69,14 @@ n’apparaît jamais dans une ligne de commande, un log ou le document lu par
 l’icône. Toutes les opérations worker utilisent HTTPS sur le port dédié Agent ;
 HTTP est refusé par l'installateur et par le worker installé.
 
-La désinstallation Windows arrête et désenregistre Katsuyu, retire le jeton et
-les exécutables, mais conserve volontairement les logs et le workspace.
+La désinstallation Windows arrête Katsuyu, retire le jeton, les exécutables et
+les composants IA, mais conserve volontairement les logs et le workspace.
 
-Une version ultérieure de `KatsuyuSetup.exe` détecte l'installation existante,
-réutilise son adresse Agent, son identité et son jeton, arrête proprement le
-worker et l'icône, remplace les exécutables avec sauvegarde de retour arrière,
-puis redémarre Katsuyu. Les logs, le workspace et l'appairage sont conservés.
+`KatsuyuSetup.exe` détecte l'installation existante, réutilise son adresse
+Agent, son identité et son jeton, arrête proprement le worker et l'icône,
+remplace les exécutables avec sauvegarde de retour arrière, puis redémarre
+Katsuyu. Les logs, le workspace, l'appairage et le modèle IA vérifié sont
+conservés.
 
 ## Mise à jour
 

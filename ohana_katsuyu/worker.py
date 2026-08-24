@@ -25,6 +25,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from ohana_katsuyu import __version__
+from ohana_katsuyu.ai import AiInferenceHandler
 from ohana_katsuyu.handlers import (
     BackupCompressHandler,
     BackupEncryptHandler,
@@ -111,11 +112,14 @@ class AgentClient:
         temporary = destination.with_suffix(destination.suffix + ".part")
         temporary.unlink(missing_ok=True)
         try:
-            with urlopen(
-                request,
-                timeout=max(self.timeout_seconds, 300),
-                context=self._ssl_context(),
-            ) as response, temporary.open("wb") as output:
+            with (
+                urlopen(
+                    request,
+                    timeout=max(self.timeout_seconds, 300),
+                    context=self._ssl_context(),
+                ) as response,
+                temporary.open("wb") as output,
+            ):
                 while chunk := response.read(1024 * 1024):
                     context.check()
                     output.write(chunk)
@@ -421,6 +425,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", type=Path, default=root / "katsuyu.log")
     parser.add_argument("--status-file", type=Path, default=root / "status.json")
     parser.add_argument("--age-binary", type=Path, default=Path("age.exe"))
+    parser.add_argument("--ai-runtime", type=Path)
+    parser.add_argument("--ai-model", type=Path)
+    parser.add_argument(
+        "--ai-model-id", default="ministral-3-14b-reasoning-2512-q4-k-m"
+    )
+    parser.add_argument("--ai-model-sha256")
+    parser.add_argument("--ai-context-size", type=int, default=8192)
     parser.add_argument("--worker-id", default=socket.gethostname())
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--heartbeat-seconds", type=float, default=5.0)
@@ -447,6 +458,8 @@ def apply_configuration(arguments: argparse.Namespace) -> None:
         "status_file",
         "age_binary",
     )
+    optional_path_fields = ("ai_runtime", "ai_model")
+    optional_string_fields = ("ai_model_id", "ai_model_sha256")
     for field in string_fields:
         value = document.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -457,6 +470,23 @@ def apply_configuration(arguments: argparse.Namespace) -> None:
         if not isinstance(value, str) or not value.strip():
             raise SystemExit(f"Worker configuration field {field} is missing")
         setattr(arguments, field, Path(value))
+    for field in optional_path_fields:
+        value = document.get(field)
+        if value is not None:
+            if not isinstance(value, str) or not value.strip():
+                raise SystemExit(f"Worker configuration field {field} is invalid")
+            setattr(arguments, field, Path(value))
+    for field in optional_string_fields:
+        value = document.get(field)
+        if value is not None:
+            if not isinstance(value, str) or not value.strip():
+                raise SystemExit(f"Worker configuration field {field} is invalid")
+            setattr(arguments, field, value.strip())
+    if "ai_context_size" in document:
+        value = document["ai_context_size"]
+        if not isinstance(value, int):
+            raise SystemExit("Worker configuration field ai_context_size is invalid")
+        arguments.ai_context_size = value
 
 
 def main() -> None:
@@ -492,22 +522,38 @@ def main() -> None:
     )
     workspace = KatsuyuWorkspace(arguments.workspace)
     client = AgentClient(
-            arguments.base_url,
-            token,
-            ca_certificate_file=arguments.ca_file,
+        arguments.base_url,
+        token,
+        ca_certificate_file=arguments.ca_file,
+    )
+    handlers: dict[str, KatsuyuHandler] = {
+        "system.health": SystemHealthHandler(workspace),
+        "backup.compress": BackupCompressHandler(workspace),
+        "backup.encrypt": BackupEncryptHandler(workspace, arguments.age_binary),
+        "backup.verify": BackupVerifyHandler(workspace),
+        "backup.infra": InfraBackupHandler(workspace, client, arguments.age_binary),
+    }
+    ai_values = (
+        arguments.ai_runtime,
+        arguments.ai_model,
+        arguments.ai_model_sha256,
+    )
+    if any(value is not None for value in ai_values):
+        if not all(value is not None for value in ai_values):
+            raise SystemExit(
+                "Katsuyu AI requires ai_runtime, ai_model and ai_model_sha256"
+            )
+        handlers["ai.inference"] = AiInferenceHandler(
+            runtime=arguments.ai_runtime,
+            model=arguments.ai_model,
+            model_id=arguments.ai_model_id,
+            model_sha256=arguments.ai_model_sha256,
+            context_size=arguments.ai_context_size,
         )
     worker = KatsuyuWorker(
         client=client,
         worker_id=arguments.worker_id,
-        handlers={
-            "system.health": SystemHealthHandler(workspace),
-            "backup.compress": BackupCompressHandler(workspace),
-            "backup.encrypt": BackupEncryptHandler(workspace, arguments.age_binary),
-            "backup.verify": BackupVerifyHandler(workspace),
-            "backup.infra": InfraBackupHandler(
-                workspace, client, arguments.age_binary
-            ),
-        },
+        handlers=handlers,
         heartbeat_seconds=arguments.heartbeat_seconds,
         status_store=StatusStore(arguments.status_file),
     )
