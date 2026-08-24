@@ -2,6 +2,17 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.6.3] — Collecte des journaux HAOS — 2026-08-24
+
+### Corrigé
+
+- Les journaux texte Home Assistant et add-ons sont récupérés via le proxy HTTP
+  `/api/hassio/...`, au lieu d'être décodés à tort comme du JSON par
+  `supervisor/api`.
+- Le WebSocket Supervisor reste limité à la découverte JSON des add-ons.
+- En cas de repli, Katsuyu conserve désormais la cause initiale de l'échec de
+  collecte au lieu de ne remonter que l'erreur HTTP secondaire.
+
 ## [0.6.2] — Diagnostic des transferts de sauvegarde — 2026-08-24
 
 ### Corrigé

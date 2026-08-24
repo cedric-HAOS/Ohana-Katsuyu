@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from threading import Event
 from time import monotonic, process_time, sleep
 from typing import Any, Protocol
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from websocket import WebSocketException, create_connection
@@ -270,13 +271,14 @@ class _DirectLogReader:
                     len(payload),
                     len(payload) >= max_bytes,
                 )
-            except (OSError, RuntimeError, ValueError, WebSocketException):
-                # Core REST remains a native bounded fallback. The synthetic line
-                # makes the missing Supervisor/add-on coverage visible to Tsunade.
+            except (OSError, RuntimeError, ValueError, WebSocketException) as error:
+                # Keep the primary Supervisor/proxy failure visible when the
+                # compatibility URL is used as a bounded fallback.
                 supervisor_warning = (
-                    b"ERROR Katsuyu Supervisor log access unavailable; "
-                    b"using Home Assistant core error log fallback\n"
-                )
+                    "ERROR Katsuyu Supervisor log access unavailable: "
+                    f"{type(error).__name__}: {error}; using Home Assistant "
+                    "core log fallback\n"
+                ).encode("utf-8", errors="replace")
             else:  # pragma: no cover - return above documents the successful branch.
                 supervisor_warning = b""
         else:
@@ -307,14 +309,49 @@ class _DirectLogReader:
         *,
         verify_tls: bool,
     ) -> bytes:
-        websocket_url = re.sub(r"^http", "ws", base_url.rstrip("/"))
+        normalized_base_url = base_url.rstrip("/")
+        tls_context = None
+        if normalized_base_url.startswith("https://") and not verify_tls:
+            tls_context = ssl._create_unverified_context()  # noqa: SLF001
+
+        def read_text(path: str, params: dict[str, object]) -> bytes:
+            query = urlencode(params)
+            request = Request(
+                f"{normalized_base_url}/api/hassio/{path.lstrip('/')}?{query}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "text/plain",
+                },
+                method="GET",
+            )
+            with urlopen(  # noqa: S310 - Agent supplies an allowlisted HA URL.
+                request,
+                timeout=timeout,
+                context=tls_context,
+            ) as response:
+                return response.read(max_bytes + 1)
+
+        fragments = [
+            read_text(
+                "/core/logs/latest",
+                {"lines": 10_000, "no_colors": 1},
+            )
+        ]
+        patterns = (
+            [str(value).casefold() for value in addon_patterns]
+            if isinstance(addon_patterns, list)
+            else []
+        )
+        if not patterns:
+            return b"\n".join(fragments)[:max_bytes]
+
+        websocket_url = re.sub(r"^http", "ws", normalized_base_url)
         ssl_options = {} if verify_tls else {"cert_reqs": ssl.CERT_NONE}
         connection = create_connection(
             f"{websocket_url}/api/websocket",
             timeout=timeout,
             sslopt=ssl_options,
         )
-        request_id = 1
         try:
             challenge = json.loads(connection.recv())
             if challenge.get("type") != "auth_required":
@@ -324,69 +361,44 @@ class _DirectLogReader:
             if authenticated.get("type") != "auth_ok":
                 raise RuntimeError("Home Assistant rejected Supervisor log access")
 
-            def call(endpoint: str, params: dict[str, object] | None = None) -> object:
-                nonlocal request_id
-                payload: dict[str, object] = {
-                    "id": request_id,
-                    "type": "supervisor/api",
-                    "endpoint": endpoint,
-                    "method": "get",
-                    "timeout": timeout,
-                }
-                request_id += 1
-                if params:
-                    payload["params"] = params
-                connection.send(json.dumps(payload))
-                response = json.loads(connection.recv())
-                if not response.get("success"):
-                    raise RuntimeError(
-                        f"Home Assistant Supervisor request failed: {endpoint}"
-                    )
-                return response.get("result")
-
-            fragments = [
-                _supervisor_log_bytes(call("/core/logs/latest", {"lines": 10_000}))
-            ]
-            patterns = (
-                [str(value).casefold() for value in addon_patterns]
-                if isinstance(addon_patterns, list)
+            connection.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "type": "supervisor/api",
+                        "endpoint": "/addons",
+                        "method": "get",
+                        "timeout": timeout,
+                    }
+                )
+            )
+            response = json.loads(connection.recv())
+            if not response.get("success"):
+                error = response.get("error")
+                raise RuntimeError(
+                    f"Home Assistant Supervisor request failed: /addons ({error})"
+                )
+            addons_result = response.get("result")
+            addons = (
+                addons_result.get("addons", [])
+                if isinstance(addons_result, dict)
                 else []
             )
-            if patterns:
-                addons_result = call("/addons")
-                addons = (
-                    addons_result.get("addons", [])
-                    if isinstance(addons_result, dict)
-                    else []
-                )
-                for addon in addons:
-                    if not isinstance(addon, dict):
-                        continue
-                    slug = str(addon.get("slug", ""))
-                    searchable = f"{slug} {addon.get('name', '')}".casefold()
-                    if slug and any(pattern in searchable for pattern in patterns):
-                        fragments.append(
-                            _supervisor_log_bytes(
-                                call(
-                                    f"/addons/{slug}/logs/latest",
-                                    {"lines": 10_000},
-                                )
-                            )
+            for addon in addons:
+                if not isinstance(addon, dict):
+                    continue
+                slug = str(addon.get("slug", ""))
+                searchable = f"{slug} {addon.get('name', '')}".casefold()
+                if slug and any(pattern in searchable for pattern in patterns):
+                    fragments.append(
+                        read_text(
+                            f"/addons/{quote(slug, safe='')}/logs",
+                            {"lines": 10_000, "no_colors": 1},
                         )
+                    )
             return b"\n".join(fragments)[:max_bytes]
         finally:
             connection.close()
-
-
-def _supervisor_log_bytes(value: object) -> bytes:
-    if isinstance(value, str):
-        return value.encode("utf-8", errors="replace")
-    if isinstance(value, dict):
-        for key in ("data", "logs", "log"):
-            content = value.get(key)
-            if isinstance(content, str):
-                return content.encode("utf-8", errors="replace")
-    raise RuntimeError("Home Assistant returned an invalid Supervisor log payload")
 
 
 class LogsHealthCheckHandler:

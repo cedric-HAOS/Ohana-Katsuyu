@@ -129,7 +129,7 @@ def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
     assert "2026-08-24" not in result["findings"][0]["summary"]
 
 
-def test_logs_health_check_uses_supervisor_core_and_discovered_addon(
+def test_logs_health_check_uses_supervisor_proxy_and_discovered_addon(
     monkeypatch,
 ) -> None:
     class FakeWebSocket:
@@ -143,12 +143,6 @@ def test_logs_health_check_uses_supervisor_core_and_discovered_addon(
                         "id": 1,
                         "type": "result",
                         "success": True,
-                        "result": "2026-08-24T09:00:00+00:00 INFO core healthy",
-                    },
-                    {
-                        "id": 2,
-                        "type": "result",
-                        "success": True,
                         "result": {
                             "addons": [
                                 {
@@ -157,15 +151,6 @@ def test_logs_health_check_uses_supervisor_core_and_discovered_addon(
                                 }
                             ]
                         },
-                    },
-                    {
-                        "id": 3,
-                        "type": "result",
-                        "success": True,
-                        "result": (
-                            "2026-08-24T09:01:00+00:00 "
-                            "ERROR Node 17 transmission failed"
-                        ),
                     },
                 ]
             )
@@ -184,12 +169,28 @@ def test_logs_health_check_uses_supervisor_core_and_discovered_addon(
         "ohana_katsuyu.handlers.create_connection",
         lambda *_args, **_kwargs: socket,
     )
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request, **_kwargs):
+        requested_urls.append(request.full_url)
+        if "/core/logs/latest" in request.full_url:
+            return io.BytesIO(b"2026-08-24T09:00:00+00:00 INFO core healthy\n")
+        if "/addons/a0d7b954_zwavejs2mqtt/logs" in request.full_url:
+            return io.BytesIO(
+                b"2026-08-24T09:01:00+00:00 ERROR Node 17 transmission failed\n"
+            )
+        raise AssertionError(f"unexpected URL: {request.full_url}")
+
+    monkeypatch.setattr("ohana_katsuyu.handlers.urlopen", fake_urlopen)
 
     def provider(*_args) -> dict[str, object]:
         return {
             "source": "zwave-01",
             "base_url": "http://zwave-01.ohana.lan:8123",
-            "url": "http://zwave-01.ohana.lan:8123/api/error_log",
+            "url": (
+                "http://zwave-01.ohana.lan:8123/api/hassio/"
+                "core/logs/latest?lines=10000&no_colors=1"
+            ),
             "access_token": "secret",
             "verify_tls": True,
             "timeout_seconds": 10,
@@ -210,10 +211,16 @@ def test_logs_health_check_uses_supervisor_core_and_discovered_addon(
 
     assert result["status"] == "KO"
     assert result["sources"][0]["findings"][0]["category"] == "zwave"
-    assert [request.get("endpoint") for request in socket.sent[1:]] == [
-        "/core/logs/latest",
-        "/addons",
-        "/addons/a0d7b954_zwavejs2mqtt/logs/latest",
+    assert [request.get("endpoint") for request in socket.sent[1:]] == ["/addons"]
+    assert requested_urls == [
+        (
+            "http://zwave-01.ohana.lan:8123/api/hassio/"
+            "core/logs/latest?lines=10000&no_colors=1"
+        ),
+        (
+            "http://zwave-01.ohana.lan:8123/api/hassio/addons/"
+            "a0d7b954_zwavejs2mqtt/logs?lines=10000&no_colors=1"
+        ),
     ]
 
 
