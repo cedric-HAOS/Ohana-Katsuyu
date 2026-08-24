@@ -131,9 +131,24 @@ class AgentClient:
                 raise RuntimeError("Agent returned an empty backup source")
             os.replace(temporary, destination)
             return digest.hexdigest(), size
-        except (HTTPError, URLError, TimeoutError, OSError) as error:
+        except HTTPError as error:
+            raw_detail = error.read().decode("utf-8", errors="replace")[:1000]
+            try:
+                document = json.loads(raw_detail)
+            except json.JSONDecodeError:
+                document = None
+            detail = (
+                str(document.get("detail"))
+                if isinstance(document, dict) and document.get("detail")
+                else raw_detail
+            )
             raise RuntimeError(
-                f"Unable to download Agent backup source: {error}"
+                "Agent a refusé la source de sauvegarde "
+                f"(HTTP {error.code}) : {detail or error.reason}"
+            ) from error
+        except (URLError, TimeoutError, OSError) as error:
+            raise RuntimeError(
+                f"Impossible de télécharger la source de sauvegarde Agent : {error}"
             ) from error
         finally:
             temporary.unlink(missing_ok=True)

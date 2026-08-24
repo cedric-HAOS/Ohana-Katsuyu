@@ -2,6 +2,16 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.6.2] — Diagnostic des transferts de sauvegarde — 2026-08-24
+
+### Corrigé
+
+- Lorsqu’Agent refuse la source d’une sauvegarde distribuée, Katsuyu conserve
+  le détail JSON borné de la réponse HTTP et le restitue en français dans le
+  résultat du job et l’incident Tsunade.
+- Les erreurs réseau distinguent désormais un refus Agent d’une indisponibilité
+  de transport, sans exposer de contenu non borné.
+
 ## [0.6.1] — Synthèses françaises et références de journaux — 2026-08-24
 
 ### Modifié

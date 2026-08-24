@@ -12,6 +12,8 @@ from time import sleep
 from typing import Any, cast
 from uuid import uuid4
 
+import pytest
+
 from ohana_katsuyu.handlers import HandlerContext
 from ohana_katsuyu.models import (
     JobClaimResult,
@@ -220,6 +222,57 @@ def test_agent_client_streams_backup_input_and_exact_artifact_length(
     assert size == len(source)
     assert received == [artifact]
     assert receipt["size_bytes"] == len(artifact)
+
+
+def test_agent_client_exposes_backup_source_error_detail_in_french(
+    tmp_path: Path,
+) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            body = json.dumps(
+                {
+                    "detail": (
+                        "Distributed backup source preparation failed: "
+                        "Impossible de créer le snapshot compact de Vision : "
+                        "database is locked"
+                    )
+                }
+            ).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = AgentClient(
+        f"http://127.0.0.1:{server.server_address[1]}", "worker-secret"
+    )
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                "Agent a refusé la source de sauvegarde.*"
+                "Impossible de créer le snapshot compact de Vision.*"
+                "database is locked"
+            ),
+        ):
+            client.download_job_input(
+                "job-1",
+                "bubule",
+                1,
+                tmp_path / "source.tar",
+                HandlerContext(),
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_worker_stops_after_agent_cancellation() -> None:
