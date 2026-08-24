@@ -2,6 +2,48 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.6.0] — Analyse IA avancée pour Tsunade — 2026-08-24
+
+### Ajouté
+
+- `ai.inference` produit le contrat d'analyse version 2 : interprétation,
+  hypothèses, causes possibles, éléments concordants et contradictoires,
+  confiance et investigations recommandées.
+- Le schéma JSON strict et le prompt local imposent que toute explication
+  causale reste une hypothèse et qu'aucune action ne soit exécutée ou autorisée.
+- Le benchmark utilise le même schéma et les mêmes règles épistémiques que le
+  handler livré afin d'éviter toute dérive entre évaluation et production.
+
+### Compatibilité
+
+- Le modèle de protocole sait encore lire les résultats historiques version 1 ;
+  le runtime 0.6.0 émet systématiquement la version 2.
+
+## [0.5.0] — Analyse déterministe des journaux — 2026-08-24
+
+### Ajouté
+
+- `logs.health_check` récupère directement les journaux HAOS depuis HA-01,
+  LINKY-01 et ZWAVE-01, les borne, normalise et groupe sans LLM.
+- Le lecteur privilégie le proxy WebSocket natif `supervisor/api`, découvre les
+  add-ons teleinfo2mqtt et Z-Wave JS, puis utilise `/api/error_log` comme repli
+  explicite si le Supervisor n'est pas accessible.
+- `logs.investigate` retourne uniquement une synthèse groupée autour d'un motif
+  littéral autorisé par Tsunade, sans persister les lignes correspondantes.
+- Les comparaisons distinguent anomalies nouvelles, stables, en hausse, en
+  baisse ou disparues ; les rapprochements temporels n'affirment jamais une
+  causalité.
+
+## [0.4.1] — Validation des sources INFRA-01 — 2026-08-24
+
+### Corrigé
+
+- `backup.infra` refuse désormais un tar tronqué, sans marqueur de fin, ou ne
+  contenant pas toutes les sources Agent, Vision, dnsmasq, chrony et
+  `vision.db` attendues.
+- Le descripteur protégé est validé contre l'identifiant du job et l'inventaire
+  attendu avant toute compression, tout chiffrement et tout envoi à Agent.
+
 ## [0.4.0] — Inférence locale optionnelle — 2026-08-24
 
 ### Ajouté

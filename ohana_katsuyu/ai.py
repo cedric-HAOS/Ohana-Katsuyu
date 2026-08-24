@@ -24,16 +24,21 @@ evidence proves an abnormal state, use KO even when the root cause remains
 unknown, and list missing evidence separately. Use INSUFFICIENT_CONTEXT only
 when the evidence cannot classify the observed state as OK or KO. An OK verdict
 applies only to the bounded interval and must not claim permanent health. Keep
-the answer concise. Never execute or request an action."""
+the answer concise. Every explanation of a cause must stay in hypotheses and
+must include supporting and contradicting evidence plus calibrated confidence.
+Never present a hypothesis as a confirmed fact. Never execute or authorize an
+action; recommended investigations are proposals for Tsunade to decide."""
 
 DIAGNOSTIC_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
+        "analysis_version": {"type": "integer", "const": 2},
         "verdict": {
             "type": "string",
             "enum": ["OK", "KO", "INSUFFICIENT_CONTEXT"],
         },
+        "interpretation": {"type": "string", "minLength": 1, "maxLength": 2000},
         "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
         "findings": {
             "type": "array",
@@ -53,6 +58,44 @@ DIAGNOSTIC_SCHEMA: dict[str, Any] = {
                 "required": ["code", "evidence", "confidence"],
             },
         },
+        "hypotheses": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "statement": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000,
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "possible_causes": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 500},
+                    },
+                    "supporting_evidence": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 500},
+                    },
+                    "contradicting_evidence": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 500},
+                    },
+                },
+                "required": [
+                    "statement",
+                    "confidence",
+                    "possible_causes",
+                    "supporting_evidence",
+                    "contradicting_evidence",
+                ],
+            },
+        },
         "missing_context": {
             "type": "array",
             "maxItems": 16,
@@ -65,9 +108,12 @@ DIAGNOSTIC_SCHEMA: dict[str, Any] = {
         },
     },
     "required": [
+        "analysis_version",
         "verdict",
+        "interpretation",
         "summary",
         "findings",
+        "hypotheses",
         "missing_context",
         "recommended_investigation",
     ],

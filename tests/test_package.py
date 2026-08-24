@@ -14,12 +14,13 @@ def test_package_is_windows_specific_and_has_bounded_runtime_dependencies() -> N
     ]
 
     assert project["name"] == "ohana-katsuyu"
-    assert project["version"] == "0.4.0"
+    assert project["version"] == "0.6.0"
     assert __version__ == project["version"]
     assert project["dependencies"] == [
         "Pillow>=11,<13",
         "pydantic>=2,<3",
         "pystray>=0.19,<1",
+        "websocket-client>=1.8,<2",
     ]
     assert project["scripts"] == {
         "ohana-katsuyu": "ohana_katsuyu.worker:main",

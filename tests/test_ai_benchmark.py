@@ -22,9 +22,20 @@ def test_complete_diagnosis_scores_one_hundred() -> None:
         "forbidden_terms": ["hardware failure"],
     }
     document = {
+        "analysis_version": 2,
         "verdict": "KO",
+        "interpretation": "The node-specific communication is degraded.",
         "summary": "Node 37 is unreachable; neighbor data is missing.",
         "findings": [],
+        "hypotheses": [
+            {
+                "statement": "The neighbor route may be unstable.",
+                "confidence": 0.7,
+                "possible_causes": ["neighbor route"],
+                "supporting_evidence": ["Node 37 is unreachable"],
+                "contradicting_evidence": [],
+            }
+        ],
         "missing_context": ["neighbor table"],
         "recommended_investigation": ["Collect neighbor table"],
     }
@@ -42,9 +53,12 @@ def test_hallucination_and_wrong_verdict_are_penalised() -> None:
         "forbidden_terms": ["router failure"],
     }
     document = {
+        "analysis_version": 2,
         "verdict": "KO",
+        "interpretation": "The evidence is insufficient.",
         "summary": "Confirmed router failure.",
         "findings": [],
+        "hypotheses": [],
         "missing_context": [],
         "recommended_investigation": [],
     }

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
+import json
+import tarfile
 from io import StringIO
 from pathlib import Path
 from threading import Event
@@ -19,6 +22,8 @@ from ohana_katsuyu.handlers import (
     InfraBackupHandler,
     JobCancelledError,
     KatsuyuWorkspace,
+    LogsHealthCheckHandler,
+    LogsInvestigateHandler,
     SystemHealthHandler,
     SystemMetrics,
 )
@@ -32,6 +37,205 @@ class FakeProbe:
             memory_total_bytes=8 * 1024**3,
             memory_available_bytes=5 * 1024**3,
         )
+
+
+def _log_context() -> HandlerContext:
+    return HandlerContext(job_id="job-logs", worker_id="bubule", attempt=1)
+
+
+def _log_provider(
+    job_id: str, worker_id: str, attempt: int, source: str
+) -> dict[str, object]:
+    assert (job_id, worker_id, attempt) == ("job-logs", "bubule", 1)
+    return {
+        "source": source,
+        "url": f"http://{source}.ohana.lan:8123/api/error_log",
+        "access_token": "secret",
+        "verify_tls": True,
+        "timeout_seconds": 10,
+    }
+
+
+def test_logs_health_check_groups_and_compares_without_llm(monkeypatch) -> None:
+    content = (
+        b"2026-08-24T09:00:00+00:00 ERROR Node 17 transmission failed\n"
+        b"2026-08-24T09:01:00+00:00 ERROR Node 18 transmission failed\n"
+        b"2026-08-22T09:01:00+00:00 ERROR old timeout\n"
+        b"2026-08-24T09:02:00+00:00 INFO healthy\n"
+    )
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(content),
+    )
+    result = LogsHealthCheckHandler(_log_provider).execute(
+        {
+            "sources": ["zwave-01"],
+            "window_started_at": "2026-08-24T00:00:00+00:00",
+            "window_ended_at": "2026-08-25T00:00:00+00:00",
+            "max_bytes_per_source": 4096,
+            "baseline": [],
+            "incident_id": None,
+        },
+        _log_context(),
+    )
+
+    assert result["status"] == "KO"
+    assert result["sources"][0]["analyzed_lines"] == 3
+    assert result["sources"][0]["findings"][0]["occurrences"] == 2
+    assert result["sources"][0]["findings"][0]["category"] == "zwave"
+    assert result["new_anomaly_count"] == 1
+
+
+def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
+    content = "\n".join(
+        [
+            "2026-08-24T09:00:00+00:00 before",
+            "2026-08-24T09:01:00+00:00 Node 17 transmission failed",
+            "2026-08-24T09:02:00+00:00 after",
+            "2026-08-22T09:02:00+00:00 Node 17 old",
+        ]
+    ).encode()
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(content),
+    )
+    result = LogsInvestigateHandler(_log_provider).execute(
+        {
+            "source": "zwave-01",
+            "window_started_at": "2026-08-24T08:30:00+00:00",
+            "window_ended_at": "2026-08-24T09:30:00+00:00",
+            "pattern": "Node 17",
+            "max_bytes": 4096,
+            "incident_id": "11111111-1111-4111-8111-111111111111",
+        },
+        _log_context(),
+    )
+
+    assert result["status"] == "KO"
+    assert result["matched_lines"] == 1
+    assert len(result["findings"]) == 1
+    assert "transmission failed" in result["findings"][0]["signature"]
+    assert "2026-08-24" not in result["findings"][0]["summary"]
+
+
+def test_logs_health_check_uses_supervisor_core_and_discovered_addon(
+    monkeypatch,
+) -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+            self.responses = iter(
+                [
+                    {"type": "auth_required"},
+                    {"type": "auth_ok"},
+                    {
+                        "id": 1,
+                        "type": "result",
+                        "success": True,
+                        "result": "2026-08-24T09:00:00+00:00 INFO core healthy",
+                    },
+                    {
+                        "id": 2,
+                        "type": "result",
+                        "success": True,
+                        "result": {
+                            "addons": [
+                                {
+                                    "slug": "a0d7b954_zwavejs2mqtt",
+                                    "name": "Z-Wave JS UI",
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "id": 3,
+                        "type": "result",
+                        "success": True,
+                        "result": (
+                            "2026-08-24T09:01:00+00:00 "
+                            "ERROR Node 17 transmission failed"
+                        ),
+                    },
+                ]
+            )
+
+        def recv(self) -> str:
+            return json.dumps(next(self.responses))
+
+        def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+        def close(self) -> None:
+            return None
+
+    socket = FakeWebSocket()
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.create_connection",
+        lambda *_args, **_kwargs: socket,
+    )
+
+    def provider(*_args) -> dict[str, object]:
+        return {
+            "source": "zwave-01",
+            "base_url": "http://zwave-01.ohana.lan:8123",
+            "url": "http://zwave-01.ohana.lan:8123/api/error_log",
+            "access_token": "secret",
+            "verify_tls": True,
+            "timeout_seconds": 10,
+            "addon_name_patterns": ["z-wave js", "zwavejs"],
+        }
+
+    result = LogsHealthCheckHandler(provider).execute(
+        {
+            "sources": ["zwave-01"],
+            "window_started_at": "2026-08-24T00:00:00+00:00",
+            "window_ended_at": "2026-08-25T00:00:00+00:00",
+            "max_bytes_per_source": 4096,
+            "baseline": [],
+            "incident_id": None,
+        },
+        _log_context(),
+    )
+
+    assert result["status"] == "KO"
+    assert result["sources"][0]["findings"][0]["category"] == "zwave"
+    assert [request.get("endpoint") for request in socket.sent[1:]] == [
+        "/core/logs/latest",
+        "/addons",
+        "/addons/a0d7b954_zwavejs2mqtt/logs/latest",
+    ]
+
+
+def _infra_source_tar(backup_id: str = "20260820T120000Z") -> bytes:
+    output = io.BytesIO()
+    descriptor = json.dumps(
+        {
+            "schema_version": 1,
+            "backup_id": backup_id,
+            "profile": "infra-01",
+            "contents": [
+                "etc/ohana-agent",
+                "etc/ohana-vision",
+                "etc/dnsmasq.d",
+                "etc/chrony/chrony.conf",
+                "var/lib/ohana-vision/vision.db",
+            ],
+        }
+    ).encode()
+    with tarfile.open(fileobj=output, mode="w:") as archive:
+        for name in ("etc/ohana-agent", "etc/ohana-vision", "etc/dnsmasq.d"):
+            member = tarfile.TarInfo(name)
+            member.type = tarfile.DIRTYPE
+            archive.addfile(member)
+        for name, content in (
+            ("etc/chrony/chrony.conf", b"pool example.test\n"),
+            ("var/lib/ohana-vision/vision.db", b"SQLite format 3\x00"),
+            ("ohana-backup/descriptor.json", descriptor),
+        ):
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+    return output.getvalue()
 
 
 def test_system_health_is_local_and_strict(tmp_path: Path) -> None:
@@ -175,7 +379,7 @@ def test_infra_backup_fetches_and_returns_only_a_verified_remote_receipt(
         ) -> tuple[str, int]:
             assert (job_id, worker_id, attempt) == ("job-1", "bubule", 2)
             context.check()
-            content = b"uncompressed tar payload"
+            content = _infra_source_tar()
             destination.write_bytes(content)
             return hashlib.sha256(content).hexdigest(), len(content)
 
@@ -215,3 +419,48 @@ def test_infra_backup_fetches_and_returns_only_a_verified_remote_receipt(
     assert result["backup_id"] == "20260820T120000Z"
     assert result["size_bytes"] == len(b"encrypted")
     assert not (tmp_path / "jobs" / "job-1").exists()
+
+
+def test_infra_backup_rejects_truncated_source_before_encryption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeTransfer:
+        def download_job_input(
+            self,
+            _job_id: str,
+            _worker_id: str,
+            _attempt: int,
+            destination: Path,
+            _context: HandlerContext,
+        ) -> tuple[str, int]:
+            content = _infra_source_tar().rstrip(b"\0")
+            destination.write_bytes(content)
+            return hashlib.sha256(content).hexdigest(), len(content)
+
+        def upload_job_artifact(
+            self, *_args: object, **_kwargs: object
+        ) -> dict[str, object]:
+            raise AssertionError("an incomplete source must never be uploaded")
+
+    popen_called = False
+
+    def unexpected_popen(*_args: object, **_kwargs: object) -> object:
+        nonlocal popen_called
+        popen_called = True
+        raise AssertionError("an incomplete source must never be encrypted")
+
+    monkeypatch.setattr("ohana_katsuyu.handlers.subprocess.Popen", unexpected_popen)
+    with pytest.raises(ValueError, match="complete tar trailer"):
+        InfraBackupHandler(
+            KatsuyuWorkspace(tmp_path),
+            FakeTransfer(),  # type: ignore[arg-type]
+            Path(r"C:\Tools\age.exe"),
+        ).execute(
+            {
+                "backup_id": "20260820T120000Z",
+                "recipient": "age1" + "q" * 58,
+                "compression_level": 6,
+            },
+            HandlerContext(job_id="job-1", worker_id="bubule", attempt=1),
+        )
+    assert not popen_called

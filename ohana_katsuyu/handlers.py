@@ -5,11 +5,16 @@ from __future__ import annotations
 import ctypes
 import gzip
 import hashlib
+import json
 import os
 import platform
+import re
 import shutil
+import ssl
 import subprocess
+import tarfile
 import tempfile
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -17,6 +22,9 @@ from pathlib import Path, PurePosixPath
 from threading import Event
 from time import monotonic, process_time, sleep
 from typing import Any, Protocol
+from urllib.request import Request, urlopen
+
+from websocket import WebSocketException, create_connection
 
 from ohana_katsuyu.models import (
     BackupCompressParameters,
@@ -28,6 +36,14 @@ from ohana_katsuyu.models import (
     InfraBackupParameters,
     InfraBackupResult,
     JobProgress,
+    LogBaseline,
+    LogCorrelation,
+    LogFinding,
+    LogsHealthCheckParameters,
+    LogsHealthCheckResult,
+    LogsInvestigateParameters,
+    LogsInvestigateResult,
+    LogSourceHealth,
     SystemHealthIssue,
     SystemHealthParameters,
     SystemHealthResult,
@@ -40,7 +56,25 @@ HANDLER_TYPES = (
     "backup.encrypt",
     "backup.verify",
     "backup.infra",
+    "logs.health_check",
+    "logs.investigate",
 )
+INFRA_REQUIRED_MEMBERS = frozenset(
+    {
+        "etc/ohana-agent",
+        "etc/ohana-vision",
+        "etc/dnsmasq.d",
+        "etc/chrony/chrony.conf",
+        "var/lib/ohana-vision/vision.db",
+    }
+)
+INFRA_DIRECTORY_ROOTS = frozenset(
+    {"etc/ohana-agent", "etc/ohana-vision", "etc/dnsmasq.d"}
+)
+INFRA_FORBIDDEN_MEMBERS = frozenset(
+    {"etc/ohana-agent/tls/ca.key", "etc/ohana-agent/tls/ca.srl"}
+)
+INFRA_DESCRIPTOR = "ohana-backup/descriptor.json"
 
 
 class JobCancelledError(RuntimeError):
@@ -110,6 +144,470 @@ class KatsuyuWorkspace:
         if not resolved.is_relative_to(self.root):
             raise ValueError("job path escapes the Katsuyu workspace")
         return resolved
+
+
+LogSourceProvider = Callable[[str, str, int, str], dict[str, Any]]
+_TIMESTAMP = re.compile(
+    r"(?P<timestamp>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?)"
+)
+_ANOMALY = re.compile(
+    r"\b(error|exception|traceback|timeout|timed out|failed|failure|"
+    r"disconnect(?:ed)?|reconnect(?:ed|ing)?|restart(?:ed|ing)?|unavailable|"
+    r"dead|serial|frame|interview|routing|mqtt|checksum invalid|"
+    r"transmission failed)\b",
+    re.IGNORECASE,
+)
+_VARIABLE = re.compile(
+    r"\b(?:[0-9a-f]{8}-[0-9a-f-]{27,}|0x[0-9a-f]+|"
+    r"\d{1,3}(?:\.\d{1,3}){3}|\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_log_timestamp(line: str) -> datetime | None:
+    match = _TIMESTAMP.search(line)
+    if match is None:
+        return None
+    candidate = match.group("timestamp").replace(" ", "T").replace(",", ".")
+    if candidate.endswith("Z"):
+        candidate = f"{candidate[:-1]}+00:00"
+    try:
+        value = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _category(source: str, line: str) -> str:
+    lowered = line.lower()
+    if source == "zwave-01" and any(
+        term in lowered for term in ("node", "transmission", "interview", "routing")
+    ):
+        return "zwave"
+    if source == "linky-01" and any(
+        term in lowered for term in ("teleinfo", "serial", "frame", "checksum")
+    ):
+        return "serial"
+    for category, terms in (
+        ("zwave", ("z-wave", "zwave", "node dead", "interview", "routing")),
+        ("serial", ("serial", "teleinfo", "frame", "checksum")),
+        ("mqtt", ("mqtt",)),
+        ("automation", ("automation",)),
+        ("timeout", ("timeout", "timed out")),
+        ("network", ("network", "disconnect", "reconnect", "unavailable")),
+        ("restart", ("restart",)),
+        ("exception", ("exception", "traceback")),
+    ):
+        if any(term in lowered for term in terms):
+            return category
+    return "other"
+
+
+def _signature(line: str) -> str:
+    normalized = _TIMESTAMP.sub("<timestamp>", line.lower())
+    normalized = _VARIABLE.sub("<value>", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized[:160] or "unclassified log anomaly"
+
+
+def _severity(line: str) -> str:
+    lowered = line.lower()
+    if "critical" in lowered or "fatal" in lowered:
+        return "critical"
+    if any(term in lowered for term in ("error", "exception", "failed", "dead")):
+        return "error"
+    return "warning"
+
+
+class _DirectLogReader:
+    def __init__(self, source_provider: LogSourceProvider) -> None:
+        self.source_provider = source_provider
+
+    def read(
+        self,
+        source: str,
+        max_bytes: int,
+        context: HandlerContext,
+    ) -> tuple[list[str], int, bool]:
+        if not context.job_id or not context.worker_id or context.attempt < 1:
+            raise RuntimeError("log retrieval requires an owning job attempt")
+        descriptor = self.source_provider(
+            context.job_id, context.worker_id, context.attempt, source
+        )
+        if descriptor.get("source") != source:
+            raise RuntimeError("Agent returned a mismatched log source")
+        url = descriptor.get("url")
+        token = descriptor.get("access_token")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise RuntimeError("Agent returned an invalid Home Assistant log URL")
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("Agent returned an invalid Home Assistant token")
+        tls_context = None
+        if url.startswith("https://") and descriptor.get("verify_tls", True) is False:
+            tls_context = ssl._create_unverified_context()  # noqa: SLF001
+        request = Request(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Accept": "text/plain"},
+            method="GET",
+        )
+        timeout = float(descriptor.get("timeout_seconds", 30))
+        base_url = descriptor.get("base_url")
+        if isinstance(base_url, str):
+            try:
+                payload = self._read_supervisor(
+                    base_url,
+                    token,
+                    descriptor.get("addon_name_patterns", []),
+                    max_bytes,
+                    min(max(timeout, 5), 60),
+                    verify_tls=descriptor.get("verify_tls", True) is not False,
+                )
+                return (
+                    payload.decode("utf-8", errors="replace").splitlines(),
+                    len(payload),
+                    len(payload) >= max_bytes,
+                )
+            except (OSError, RuntimeError, ValueError, WebSocketException):
+                # Core REST remains a native bounded fallback. The synthetic line
+                # makes the missing Supervisor/add-on coverage visible to Tsunade.
+                supervisor_warning = (
+                    b"ERROR Katsuyu Supervisor log access unavailable; "
+                    b"using Home Assistant core error log fallback\n"
+                )
+            else:  # pragma: no cover - return above documents the successful branch.
+                supervisor_warning = b""
+        else:
+            supervisor_warning = b""
+        context.check()
+        with urlopen(  # noqa: S310 - Agent supplies an allowlisted configured URL.
+            request,
+            timeout=min(max(timeout, 5), 60),
+            context=tls_context,
+        ) as response:
+            payload = response.read(max_bytes + 1)
+        context.check()
+        truncated = len(supervisor_warning) + len(payload) > max_bytes
+        bounded = (supervisor_warning + payload)[:max_bytes]
+        return (
+            bounded.decode("utf-8", errors="replace").splitlines(),
+            len(bounded),
+            truncated,
+        )
+
+    @staticmethod
+    def _read_supervisor(
+        base_url: str,
+        token: str,
+        addon_patterns: object,
+        max_bytes: int,
+        timeout: float,
+        *,
+        verify_tls: bool,
+    ) -> bytes:
+        websocket_url = re.sub(r"^http", "ws", base_url.rstrip("/"))
+        ssl_options = {} if verify_tls else {"cert_reqs": ssl.CERT_NONE}
+        connection = create_connection(
+            f"{websocket_url}/api/websocket",
+            timeout=timeout,
+            sslopt=ssl_options,
+        )
+        request_id = 1
+        try:
+            challenge = json.loads(connection.recv())
+            if challenge.get("type") != "auth_required":
+                raise RuntimeError("unexpected Home Assistant WebSocket challenge")
+            connection.send(json.dumps({"type": "auth", "access_token": token}))
+            authenticated = json.loads(connection.recv())
+            if authenticated.get("type") != "auth_ok":
+                raise RuntimeError("Home Assistant rejected Supervisor log access")
+
+            def call(endpoint: str, params: dict[str, object] | None = None) -> object:
+                nonlocal request_id
+                payload: dict[str, object] = {
+                    "id": request_id,
+                    "type": "supervisor/api",
+                    "endpoint": endpoint,
+                    "method": "get",
+                    "timeout": timeout,
+                }
+                request_id += 1
+                if params:
+                    payload["params"] = params
+                connection.send(json.dumps(payload))
+                response = json.loads(connection.recv())
+                if not response.get("success"):
+                    raise RuntimeError(
+                        f"Home Assistant Supervisor request failed: {endpoint}"
+                    )
+                return response.get("result")
+
+            fragments = [
+                _supervisor_log_bytes(call("/core/logs/latest", {"lines": 10_000}))
+            ]
+            patterns = (
+                [str(value).casefold() for value in addon_patterns]
+                if isinstance(addon_patterns, list)
+                else []
+            )
+            if patterns:
+                addons_result = call("/addons")
+                addons = (
+                    addons_result.get("addons", [])
+                    if isinstance(addons_result, dict)
+                    else []
+                )
+                for addon in addons:
+                    if not isinstance(addon, dict):
+                        continue
+                    slug = str(addon.get("slug", ""))
+                    searchable = f"{slug} {addon.get('name', '')}".casefold()
+                    if slug and any(pattern in searchable for pattern in patterns):
+                        fragments.append(
+                            _supervisor_log_bytes(
+                                call(
+                                    f"/addons/{slug}/logs/latest",
+                                    {"lines": 10_000},
+                                )
+                            )
+                        )
+            return b"\n".join(fragments)[:max_bytes]
+        finally:
+            connection.close()
+
+
+def _supervisor_log_bytes(value: object) -> bytes:
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        for key in ("data", "logs", "log"):
+            content = value.get(key)
+            if isinstance(content, str):
+                return content.encode("utf-8", errors="replace")
+    raise RuntimeError("Home Assistant returned an invalid Supervisor log payload")
+
+
+class LogsHealthCheckHandler:
+    """Fetch each target directly and group deterministic anomalies."""
+
+    def __init__(self, source_provider: LogSourceProvider) -> None:
+        self.reader = _DirectLogReader(source_provider)
+
+    def execute(
+        self,
+        parameters: dict[str, Any],
+        context: HandlerContext | None = None,
+    ) -> dict[str, Any]:
+        request = LogsHealthCheckParameters.model_validate(parameters)
+        runtime = context or HandlerContext()
+        baseline = {
+            (entry.source, entry.signature): entry.occurrences
+            for entry in request.baseline
+        }
+        results: list[LogSourceHealth] = []
+        for index, source in enumerate(request.sources):
+            runtime.report(
+                5 + (index * 80 / len(request.sources)),
+                "logs.fetching",
+                source,
+            )
+            lines, fetched_bytes, truncated = self.reader.read(
+                source, request.max_bytes_per_source, runtime
+            )
+            results.append(
+                self._analyze_source(
+                    source,
+                    lines,
+                    fetched_bytes,
+                    truncated,
+                    request.window_started_at,
+                    request.window_ended_at,
+                    baseline,
+                )
+            )
+        findings = [finding for result in results for finding in result.findings]
+        current_keys = {(finding.source, finding.signature) for finding in findings}
+        disappeared = [
+            LogBaseline(source=source, signature=signature, occurrences=occurrences)
+            for (source, signature), occurrences in baseline.items()
+            if (source, signature) not in current_keys
+        ][:192]
+        correlations: list[LogCorrelation] = []
+        timed = [finding for finding in findings if finding.last_at is not None]
+        for index, left in enumerate(timed):
+            for right in timed[index + 1 :]:
+                if left.source == right.source:
+                    continue
+                assert left.last_at is not None and right.last_at is not None
+                if abs((left.last_at - right.last_at).total_seconds()) <= 10:
+                    correlations.append(
+                        LogCorrelation(
+                            sources=sorted({left.source, right.source}),
+                            occurred_at=max(left.last_at, right.last_at),
+                            summary=(
+                                "Events are temporally correlated; "
+                                "no causality is inferred."
+                            ),
+                        )
+                    )
+                if len(correlations) >= 32:
+                    break
+            if len(correlations) >= 32:
+                break
+        result = LogsHealthCheckResult(
+            status="KO" if findings else "OK",
+            analyzed_at=datetime.now(UTC),
+            window_started_at=request.window_started_at,
+            window_ended_at=request.window_ended_at,
+            sources=results,
+            new_anomaly_count=sum(finding.trend == "new" for finding in findings),
+            worsening_anomaly_count=sum(
+                finding.trend == "increasing" for finding in findings
+            ),
+            disappeared_anomalies=disappeared,
+            correlations=correlations,
+            recommended_investigations=[
+                f"Investigate {finding.source}: {finding.signature}"
+                for finding in sorted(
+                    findings,
+                    key=lambda item: (item.severity, item.occurrences),
+                    reverse=True,
+                )[:16]
+            ],
+        )
+        runtime.report(100, "logs.complete")
+        return result.model_dump(mode="json")
+
+    @staticmethod
+    def _analyze_source(
+        source: str,
+        lines: list[str],
+        fetched_bytes: int,
+        truncated: bool,
+        started_at: datetime,
+        ended_at: datetime,
+        baseline: dict[tuple[str, str], int],
+    ) -> LogSourceHealth:
+        grouped: Counter[str] = Counter()
+        samples: dict[str, str] = {}
+        times: dict[str, list[datetime]] = defaultdict(list)
+        analyzed_lines = 0
+        for line in lines[:200_000]:
+            occurred_at = _parse_log_timestamp(line)
+            if occurred_at is not None and not (started_at <= occurred_at <= ended_at):
+                continue
+            analyzed_lines += 1
+            if not _ANOMALY.search(line):
+                continue
+            signature = _signature(line)
+            grouped[signature] += 1
+            samples.setdefault(signature, line.strip()[:500])
+            if occurred_at is not None:
+                times[signature].append(occurred_at)
+        findings: list[LogFinding] = []
+        for signature, occurrences in grouped.most_common(64):
+            previous = baseline.get((source, signature))
+            if previous is None:
+                trend = "new"
+            elif occurrences > max(previous + 2, int(previous * 1.5)):
+                trend = "increasing"
+            elif occurrences < int(previous * 0.5):
+                trend = "decreasing"
+            else:
+                trend = "stable" if occurrences == previous else "known"
+            observed = times.get(signature, [])
+            sample = samples[signature]
+            findings.append(
+                LogFinding(
+                    source=source,
+                    signature=signature,
+                    category=_category(source, sample),
+                    severity=_severity(sample),
+                    summary=f"{signature} ({occurrences} occurrence(s))",
+                    occurrences=occurrences,
+                    first_at=min(observed) if observed else None,
+                    last_at=max(observed) if observed else None,
+                    trend=trend,
+                )
+            )
+        return LogSourceHealth(
+            source=source,
+            status="KO" if findings else "OK",
+            fetched_bytes=fetched_bytes,
+            truncated=truncated,
+            analyzed_lines=analyzed_lines,
+            findings=findings,
+        )
+
+
+class LogsInvestigateHandler:
+    """Return bounded context after Tsunade authorizes one plain pattern."""
+
+    def __init__(self, source_provider: LogSourceProvider) -> None:
+        self.reader = _DirectLogReader(source_provider)
+
+    def execute(
+        self,
+        parameters: dict[str, Any],
+        context: HandlerContext | None = None,
+    ) -> dict[str, Any]:
+        request = LogsInvestigateParameters.model_validate(parameters)
+        runtime = context or HandlerContext()
+        runtime.report(10, "logs.fetching", request.source)
+        lines, _fetched_bytes, truncated = self.reader.read(
+            request.source, request.max_bytes, runtime
+        )
+        eligible: list[str] = []
+        for line in lines:
+            occurred_at = _parse_log_timestamp(line)
+            if occurred_at is None or (
+                request.window_started_at <= occurred_at <= request.window_ended_at
+            ):
+                eligible.append(line)
+        grouped: Counter[str] = Counter()
+        samples: dict[str, str] = {}
+        times: dict[str, list[datetime]] = defaultdict(list)
+        matched_lines = 0
+        needle = request.pattern.casefold()
+        for line in eligible[:200_000]:
+            if needle in line.casefold():
+                matched_lines += 1
+                signature = _signature(line)
+                grouped[signature] += 1
+                samples.setdefault(signature, line)
+                occurred_at = _parse_log_timestamp(line)
+                if occurred_at is not None:
+                    times[signature].append(occurred_at)
+        findings: list[LogFinding] = []
+        for signature, occurrences in grouped.most_common(64):
+            observed = times.get(signature, [])
+            sample = samples[signature]
+            findings.append(
+                LogFinding(
+                    source=request.source,
+                    signature=signature,
+                    category=_category(request.source, sample),
+                    severity=_severity(sample),
+                    summary=f"{signature} ({occurrences} occurrence(s))",
+                    occurrences=occurrences,
+                    first_at=min(observed) if observed else None,
+                    last_at=max(observed) if observed else None,
+                    trend="new",
+                )
+            )
+        result = LogsInvestigateResult(
+            status="KO" if matched_lines else "OK",
+            analyzed_at=datetime.now(UTC),
+            source=request.source,
+            pattern=request.pattern,
+            matched_lines=matched_lines,
+            findings=findings,
+            truncated=truncated or len(eligible) > 200_000 or len(grouped) > 64,
+        )
+        runtime.report(100, "logs.complete")
+        return result.model_dump(mode="json")
 
 
 class InfraBackupTransferClient(Protocol):
@@ -506,6 +1004,8 @@ class InfraBackupHandler:
                 source,
                 context,
             )
+            _validate_infra_source_archive(source, request.backup_id)
+            context.report(20, "infra.validate")
             compression = BackupCompressHandler(self.workspace).execute(
                 {
                     "source": source_relative,
@@ -514,9 +1014,7 @@ class InfraBackupHandler:
                 },
                 context,
             )
-            encryption = BackupEncryptHandler(
-                self.workspace, self.age_binary
-            ).execute(
+            encryption = BackupEncryptHandler(self.workspace, self.age_binary).execute(
                 {
                     "source": compressed_relative,
                     "destination": encrypted_relative,
@@ -566,6 +1064,70 @@ class InfraBackupHandler:
                 source.parent.rmdir()
             except OSError:
                 pass
+
+
+def _validate_infra_source_archive(source: Path, backup_id: str) -> None:
+    """Reject truncated or incomplete Agent source archives before encryption."""
+
+    size = source.stat().st_size
+    if size < 1024:
+        raise ValueError(
+            "Agent backup source is too small to be a complete tar archive"
+        )
+    with source.open("rb") as stream:
+        stream.seek(-1024, os.SEEK_END)
+        if stream.read(1024) != bytes(1024):
+            raise ValueError("Agent backup source has no complete tar trailer")
+    try:
+        with tarfile.open(source, mode="r:") as archive:
+            members = archive.getmembers()
+            names = [member.name.rstrip("/") for member in members]
+            if len(names) != len(set(names)):
+                raise ValueError("Agent backup source contains duplicate members")
+            required = INFRA_REQUIRED_MEMBERS | {INFRA_DESCRIPTOR}
+            missing = sorted(required - set(names))
+            if missing:
+                raise ValueError(
+                    "Agent backup source is incomplete; missing: " + ", ".join(missing)
+                )
+            for member in members:
+                name = member.name.rstrip("/")
+                allowed = (
+                    name == INFRA_DESCRIPTOR
+                    or name in INFRA_REQUIRED_MEMBERS
+                    or any(
+                        name.startswith(f"{root}/") for root in INFRA_DIRECTORY_ROOTS
+                    )
+                )
+                if (
+                    not allowed
+                    or name in INFRA_FORBIDDEN_MEMBERS
+                    or not (member.isfile() or member.isdir())
+                ):
+                    raise ValueError(
+                        f"Agent backup source member is not allowed: {name}"
+                    )
+            descriptor_member = archive.getmember(INFRA_DESCRIPTOR)
+            descriptor_stream = archive.extractfile(descriptor_member)
+            if descriptor_stream is None or descriptor_member.size > 65536:
+                raise ValueError("Agent backup descriptor is invalid")
+            descriptor = json.loads(descriptor_stream.read())
+    except (OSError, tarfile.TarError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"Agent backup source is not a valid tar archive: {error}"
+        ) from error
+    contents = descriptor.get("contents") if isinstance(descriptor, dict) else None
+    if (
+        not isinstance(descriptor, dict)
+        or descriptor.get("schema_version") != 1
+        or descriptor.get("profile") != "infra-01"
+        or descriptor.get("backup_id") != backup_id
+        or not isinstance(contents, list)
+        or not all(isinstance(item, str) for item in contents)
+        or len(contents) != len(set(contents))
+        or set(contents) != INFRA_REQUIRED_MEMBERS
+    ):
+        raise ValueError("Agent backup descriptor does not match the requested backup")
 
 
 def _temporary_path(destination: Path) -> Path:

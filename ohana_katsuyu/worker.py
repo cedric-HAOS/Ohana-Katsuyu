@@ -35,6 +35,8 @@ from ohana_katsuyu.handlers import (
     JobCancelledError,
     JobTimeoutError,
     KatsuyuWorkspace,
+    LogsHealthCheckHandler,
+    LogsInvestigateHandler,
     SystemHealthHandler,
 )
 from ohana_katsuyu.models import (
@@ -188,6 +190,40 @@ class AgentClient:
             raise RuntimeError("Agent returned an invalid backup receipt") from error
         if not isinstance(value, dict):
             raise RuntimeError("Agent returned a non-object backup receipt")
+        return value
+
+    def read_log_source(
+        self,
+        job_id: str,
+        worker_id: str,
+        attempt: int,
+        source_id: str,
+    ) -> dict[str, Any]:
+        """Read a job-bound HAOS descriptor without proxying journal bytes."""
+        request = Request(
+            url=(
+                f"{self.base_url.rstrip('/')}/v1/jobs/{quote(job_id, safe='')}"
+                f"/log-source/{quote(source_id, safe='')}"
+            ),
+            headers=self._transfer_headers(worker_id, attempt),
+            method="GET",
+        )
+        try:
+            with urlopen(
+                request,
+                timeout=self.timeout_seconds,
+                context=self._ssl_context(),
+            ) as response:
+                value = json.load(response)
+        except HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")[:1000]
+            raise RuntimeError(
+                f"Agent rejected log source with HTTP {error.code}: {detail}"
+            ) from error
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Unable to read Agent log source: {error}") from error
+        if not isinstance(value, dict):
+            raise RuntimeError("Agent returned an invalid log source descriptor")
         return value
 
     def _transfer_headers(self, worker_id: str, attempt: int) -> dict[str, str]:
@@ -532,6 +568,8 @@ def main() -> None:
         "backup.encrypt": BackupEncryptHandler(workspace, arguments.age_binary),
         "backup.verify": BackupVerifyHandler(workspace),
         "backup.infra": InfraBackupHandler(workspace, client, arguments.age_binary),
+        "logs.health_check": LogsHealthCheckHandler(client.read_log_source),
+        "logs.investigate": LogsInvestigateHandler(client.read_log_source),
     }
     ai_values = (
         arguments.ai_runtime,

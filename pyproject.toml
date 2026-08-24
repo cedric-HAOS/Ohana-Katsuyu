@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ohana-katsuyu"
-version = "0.4.0"
+version = "0.6.0"
 description = "Deterministic Windows worker for Ohana-Agent distributed jobs."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -29,6 +29,7 @@ dependencies = [
     "Pillow>=11,<13",
     "pydantic>=2,<3",
     "pystray>=0.19,<1",
+    "websocket-client>=1.8,<2",
 ]
 
 

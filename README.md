@@ -12,10 +12,21 @@ ni créer un job, ni administrer Agent, ni exécuter une commande arbitraire.
 - `backup.verify` vérifie un SHA-256 et, facultativement, une taille.
 - `backup.infra` récupère le tar INFRA-01 lié au job, le compresse, le chiffre,
   le vérifie et renvoie l'artefact à Agent pour publication distante en flux.
+- `logs.health_check` récupère directement les journaux bornés de HA-01,
+  LINKY-01 et ZWAVE-01 puis renvoie uniquement une synthèse déterministe ;
+- `logs.investigate` analyse un motif ciblé après autorisation de Tsunade et
+  renvoie uniquement des signatures normalisées et comptées.
 
 Katsuyu fonctionne sans LLM. Tous les chemins de jobs sont relatifs à
 `C:\ProgramData\Ohana\Katsuyu\workspace`. Les chemins absolus, traversées `..`,
 liens symboliques et fichiers non réguliers sont refusés.
+
+La collecte des journaux privilégie l'API WebSocket native Home Assistant
+`supervisor/api` avec un jeton administrateur. Katsuyu découvre uniquement les
+add-ons dont le nom correspond à la cible (`teleinfo2mqtt` ou Z-Wave JS), lit
+leurs logs et ceux de Core, puis ferme la connexion. Le volume reste limité à
+quatre Mio par cible ; les résultats persistants ne contiennent que les
+synthèses groupées, jamais les lignes de journal brutes.
 
 ## IA locale optionnelle
 
@@ -30,12 +41,16 @@ n'occupe donc ni VRAM ni RAM lorsqu'aucun incident n'est actif. Le job ne peut
 choisir ni modèle, ni exécutable, ni schéma, ni outil. Il reçoit au plus 48 000
 caractères de preuves bornées et retourne uniquement `OK`, `KO` ou
 `INSUFFICIENT_CONTEXT`, avec constats, contexte manquant, investigation
-recommandée et métriques.
+recommandée et métriques. Le contrat d'analyse version 2 sépare
+l'interprétation des hypothèses et exige pour chacune les causes possibles,
+éléments concordants et contradictoires et un niveau de confiance.
 
 Le modèle n'exécute aucune recommandation. Les appels d'outils ont été évalués
 pendant le benchmark, mais ne sont pas activés dans le handler : Tsunade doit
 autoriser séparément toute investigation et la faire exécuter par un handler
 déclaré. Le SHA-256 du modèle est vérifié avant sa première utilisation.
+Une hypothèse n'est jamais présentée comme un fait et reste soumise à la
+décision de Tsunade dans Agent.
 
 Les options locales sont `ai_runtime`, `ai_model`, `ai_model_id`,
 `ai_model_sha256` et `ai_context_size` dans `config.json`. Si une partie de ce
@@ -125,6 +140,9 @@ Le protocole v1 réutilise exclusivement les endpoints worker d'Ohana-Agent :
 Le résultat `backup.infra` inclut la durée, le temps CPU, le pic de mémoire du
 processus, les octets logiques lus/écrits, les tailles et les SHA-256. Les
 fichiers intermédiaires sont supprimés du workspace après succès ou échec.
+Avant toute compression, Katsuyu exige un tar terminé contenant les sources
+Agent, Vision, dnsmasq, chrony, l'instantané `vision.db` et un descripteur dont
+l'identifiant et l'inventaire correspondent exactement au job.
 
 Les heartbeats publient la progression, renouvellent le bail et retournent
 l'état courant. Un état `CANCELLED` ou `TIMEOUT` interrompt le handler à son

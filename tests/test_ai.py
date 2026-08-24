@@ -10,7 +10,7 @@ from threading import Thread
 import pytest
 from pydantic import ValidationError
 
-from ohana_katsuyu.ai import AiInferenceHandler
+from ohana_katsuyu.ai import DIAGNOSTIC_SCHEMA, AiInferenceHandler
 from ohana_katsuyu.handlers import HandlerContext
 from ohana_katsuyu.models import AiInferenceParameters, AiInferenceResult
 
@@ -20,6 +20,7 @@ MODEL_SHA256 = "fe08ca2158cd7438211ec6a4e5256d31bc980f016e3f5b635fe91fe6848d461c
 def parameters() -> dict[str, object]:
     return {
         "task": "technical.diagnosis",
+        "incident_id": "11111111-1111-4111-8111-111111111111",
         "question": "Qualifier l'état borné.",
         "evidence": [{"source": "HA-01", "content": "health=OK"}],
         "max_output_tokens": 512,
@@ -43,10 +44,13 @@ def test_parameters_reject_unbounded_or_unknown_inputs() -> None:
 
 def test_result_enforces_ok_ko_and_missing_context_consistency() -> None:
     base = {
+        "analysis_version": 2,
         "generated_at": "2026-08-21T10:00:00Z",
         "model_id": "ministral-3-14b-reasoning-2512-q4-k-m",
         "model_sha256": MODEL_SHA256,
+        "interpretation": "Les éléments bornés indiquent un état normal.",
         "summary": "État borné normal.",
+        "hypotheses": [],
         "missing_context": [],
         "recommended_investigation": [],
         "metrics": {
@@ -66,12 +70,35 @@ def test_result_enforces_ok_ko_and_missing_context_consistency() -> None:
             {**base, "verdict": "INSUFFICIENT_CONTEXT", "findings": []}
         )
 
+    legacy = {key: value for key, value in base.items() if key != "analysis_version"}
+    legacy.pop("interpretation")
+    validated = AiInferenceResult.model_validate(
+        {
+            **legacy,
+            "verdict": "KO",
+            "findings": [{"code": "LEGACY", "evidence": "bounded", "confidence": 0.5}],
+            "hypotheses": [],
+        }
+    )
+    assert validated.analysis_version == 1
+
+
+def test_runtime_schema_requires_advanced_hypothesis_contract() -> None:
+    assert DIAGNOSTIC_SCHEMA["properties"]["analysis_version"] == {
+        "type": "integer",
+        "const": 2,
+    }
+    assert "analysis_version" in DIAGNOSTIC_SCHEMA["required"]
+
 
 def test_streaming_runtime_response_is_measured_and_parsed(tmp_path: Path) -> None:
     document = {
+        "analysis_version": 2,
         "verdict": "OK",
+        "interpretation": "Les éléments bornés indiquent un état normal.",
         "summary": "Intervalle borné normal.",
         "findings": [],
+        "hypotheses": [],
         "missing_context": [],
         "recommended_investigation": [],
     }

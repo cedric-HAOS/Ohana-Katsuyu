@@ -193,6 +193,128 @@ class InfraBackupResult(ProtocolModel):
     logical_io_written_bytes: int = Field(ge=0)
 
 
+LogSourceId = Literal["ha-01", "linky-01", "zwave-01"]
+
+
+class LogBaseline(ProtocolModel):
+    source: LogSourceId
+    signature: str = Field(min_length=1, max_length=160)
+    occurrences: int = Field(ge=0, le=1_000_000)
+
+
+class LogsHealthCheckParameters(ProtocolModel):
+    sources: list[LogSourceId] = Field(min_length=1, max_length=3)
+    window_started_at: datetime
+    window_ended_at: datetime
+    max_bytes_per_source: int = Field(ge=1024, le=4 * 1024 * 1024)
+    baseline: list[LogBaseline] = Field(default_factory=list, max_length=192)
+    incident_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_window(self) -> Self:
+        if len(set(self.sources)) != len(self.sources):
+            raise ValueError("log sources must be unique")
+        timestamps = (self.window_started_at, self.window_ended_at)
+        if any(
+            value.tzinfo is None or value.utcoffset() is None for value in timestamps
+        ):
+            raise ValueError("log analysis timestamps must include a timezone")
+        duration = self.window_ended_at - self.window_started_at
+        if duration.total_seconds() <= 0 or duration.total_seconds() > 48 * 3600:
+            raise ValueError(
+                "log health window must be greater than zero and at most 48 hours"
+            )
+        return self
+
+
+class LogsInvestigateParameters(ProtocolModel):
+    source: LogSourceId
+    window_started_at: datetime
+    window_ended_at: datetime
+    pattern: str = Field(min_length=1, max_length=160)
+    max_bytes: int = Field(ge=1024, le=4 * 1024 * 1024)
+    incident_id: UUID
+
+    @model_validator(mode="after")
+    def validate_window_and_pattern(self) -> Self:
+        timestamps = (self.window_started_at, self.window_ended_at)
+        if any(
+            value.tzinfo is None or value.utcoffset() is None for value in timestamps
+        ):
+            raise ValueError("log investigation timestamps must include a timezone")
+        duration = self.window_ended_at - self.window_started_at
+        if duration.total_seconds() <= 0 or duration.total_seconds() > 2 * 3600:
+            raise ValueError(
+                "log investigation window must be greater than zero "
+                "and at most two hours"
+            )
+        if any(character in self.pattern for character in "\r\n\0"):
+            raise ValueError("log investigation pattern must be plain single-line text")
+        return self
+
+
+class LogFinding(ProtocolModel):
+    source: LogSourceId
+    signature: str = Field(min_length=1, max_length=160)
+    category: Literal[
+        "exception",
+        "timeout",
+        "mqtt",
+        "network",
+        "restart",
+        "serial",
+        "zwave",
+        "automation",
+        "other",
+    ]
+    severity: Literal["warning", "error", "critical"]
+    summary: str = Field(min_length=1, max_length=500)
+    occurrences: int = Field(ge=1, le=1_000_000)
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+    trend: Literal["new", "known", "stable", "increasing", "decreasing", "disappeared"]
+
+
+class LogSourceHealth(ProtocolModel):
+    source: LogSourceId
+    status: Literal["OK", "KO"]
+    fetched_bytes: int = Field(ge=0, le=4 * 1024 * 1024)
+    truncated: bool
+    analyzed_lines: int = Field(ge=0, le=200_000)
+    findings: list[LogFinding] = Field(default_factory=list, max_length=64)
+
+
+class LogCorrelation(ProtocolModel):
+    sources: list[LogSourceId] = Field(min_length=2, max_length=3)
+    occurred_at: datetime
+    summary: str = Field(min_length=1, max_length=500)
+
+
+class LogsHealthCheckResult(ProtocolModel):
+    status: Literal["OK", "KO"]
+    analyzed_at: datetime
+    window_started_at: datetime
+    window_ended_at: datetime
+    sources: list[LogSourceHealth] = Field(min_length=1, max_length=3)
+    new_anomaly_count: int = Field(ge=0)
+    worsening_anomaly_count: int = Field(ge=0)
+    disappeared_anomalies: list[LogBaseline] = Field(
+        default_factory=list, max_length=192
+    )
+    correlations: list[LogCorrelation] = Field(default_factory=list, max_length=32)
+    recommended_investigations: list[str] = Field(default_factory=list, max_length=16)
+
+
+class LogsInvestigateResult(ProtocolModel):
+    status: Literal["OK", "KO"]
+    analyzed_at: datetime
+    source: LogSourceId
+    pattern: str = Field(min_length=1, max_length=160)
+    matched_lines: int = Field(ge=0, le=200_000)
+    findings: list[LogFinding] = Field(default_factory=list, max_length=64)
+    truncated: bool
+
+
 class AiInferenceEvidence(ProtocolModel):
     source: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
     content: str = Field(min_length=1, max_length=16_000)
@@ -200,6 +322,7 @@ class AiInferenceEvidence(ProtocolModel):
 
 class AiInferenceParameters(ProtocolModel):
     task: Literal["technical.diagnosis"] = "technical.diagnosis"
+    incident_id: UUID
     question: str = Field(min_length=1, max_length=2_000)
     evidence: list[AiInferenceEvidence] = Field(min_length=1, max_length=8)
     max_output_tokens: int = Field(default=1_024, ge=128, le=1_024)
@@ -225,13 +348,35 @@ class AiInferenceMetrics(ProtocolModel):
     duration_seconds: float = Field(ge=0)
 
 
+class AiInferenceHypothesis(ProtocolModel):
+    statement: str = Field(min_length=1, max_length=1_000)
+    confidence: float = Field(ge=0, le=1)
+    possible_causes: list[str] = Field(default_factory=list, max_length=8)
+    supporting_evidence: list[str] = Field(default_factory=list, max_length=8)
+    contradicting_evidence: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_bounded_hypothesis_text(self) -> Self:
+        values = [
+            *self.possible_causes,
+            *self.supporting_evidence,
+            *self.contradicting_evidence,
+        ]
+        if any(not value.strip() or len(value) > 500 for value in values):
+            raise ValueError("hypothesis entries must contain 1 to 500 characters")
+        return self
+
+
 class AiInferenceResult(ProtocolModel):
+    analysis_version: Literal[1, 2] = 1
     verdict: Literal["OK", "KO", "INSUFFICIENT_CONTEXT"]
     generated_at: datetime
     model_id: str = Field(min_length=1, max_length=120)
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    interpretation: str = Field(default="", max_length=2_000)
     summary: str = Field(min_length=1, max_length=1_000)
     findings: list[AiInferenceFinding] = Field(default_factory=list, max_length=16)
+    hypotheses: list[AiInferenceHypothesis] = Field(default_factory=list, max_length=8)
     missing_context: list[str] = Field(default_factory=list, max_length=16)
     recommended_investigation: list[str] = Field(default_factory=list, max_length=16)
     metrics: AiInferenceMetrics
@@ -242,6 +387,10 @@ class AiInferenceResult(ProtocolModel):
             raise ValueError("OK cannot contain anomaly findings")
         if self.verdict == "KO" and not self.findings:
             raise ValueError("KO requires at least one finding")
+        if self.analysis_version == 2 and not self.interpretation.strip():
+            raise ValueError("analysis version 2 requires an interpretation")
+        if self.analysis_version == 2 and self.verdict == "KO" and not self.hypotheses:
+            raise ValueError("KO requires at least one explicitly uncertain hypothesis")
         if self.verdict == "INSUFFICIENT_CONTEXT" and not self.missing_context:
             raise ValueError("INSUFFICIENT_CONTEXT requires missing_context")
         bounded_text = [*self.missing_context, *self.recommended_investigation]
