@@ -194,6 +194,11 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
     monkeypatch.setattr(setup.sys, "executable", str(setup_source))
     monkeypatch.setattr(setup, "secure_paths", lambda *_args: None)
     monkeypatch.setattr(setup, "AgentClient", FakeAgentClient)
+    monkeypatch.setattr(
+        setup,
+        "wake_on_lan_mac_address",
+        lambda _base_url: "AA:BB:CC:DD:EE:FF",
+    )
     monkeypatch.setattr(setup, "stop_running_components", lambda: stopped.append(True))
     monkeypatch.setattr(setup, "install_windows_startup", lambda _args: None)
     monkeypatch.setattr(setup, "register_uninstaller", lambda _path: None)
@@ -211,6 +216,7 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
     assert registrations[0][0] == "existing-token"
     assert registrations[0][1]["worker_version"] == "0.7.0"
     assert registrations[0][1]["worker_id"] == "katsuyu-bubule"
+    assert registrations[0][1]["wake_on_lan_mac_address"] == "AA:BB:CC:DD:EE:FF"
     assert registrations[0][2] == "katsuyu-Bubule"
     configuration = json.loads((state / "config.json").read_text(encoding="utf-8"))
     assert configuration["worker_id"] == "katsuyu-bubule"
@@ -266,6 +272,11 @@ def test_upgrade_can_provision_and_advertise_optional_ai(
     monkeypatch.setattr(setup, "provision_ai", lambda *_args: ai)
     monkeypatch.setattr(setup, "secure_paths", lambda *_args: None)
     monkeypatch.setattr(setup, "AgentClient", FakeAgentClient)
+    monkeypatch.setattr(
+        setup,
+        "wake_on_lan_mac_address",
+        lambda _base_url: "AA:BB:CC:DD:EE:FF",
+    )
     monkeypatch.setattr(setup, "stop_running_components", lambda: None)
     monkeypatch.setattr(setup, "install_windows_startup", lambda _args: None)
     monkeypatch.setattr(setup, "register_uninstaller", lambda _path: None)
@@ -278,3 +289,4 @@ def test_upgrade_can_provision_and_advertise_optional_ai(
     assert configuration["ai_runtime"] == str(ai.runtime)
     assert configuration["ai_model_sha256"] == "b" * 64
     assert "ai.inference" in registrations[0]["capabilities"]
+    assert registrations[0]["wake_on_lan_mac_address"] == "AA:BB:CC:DD:EE:FF"

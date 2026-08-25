@@ -87,6 +87,7 @@ def test_refresh_is_cached_for_24_hours_and_preserves_worker_state(
     store = StatusStore(tmp_path / "status.json")
     store.write(state="connected")
     calls: list[bool] = []
+    monkeypatch.setattr(updates, "__version__", "0.6.9")
     monkeypatch.setattr(
         updates,
         "read_latest_release",

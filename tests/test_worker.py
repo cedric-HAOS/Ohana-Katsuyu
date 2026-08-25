@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from io import BytesIO
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from threading import Thread
 from time import sleep
