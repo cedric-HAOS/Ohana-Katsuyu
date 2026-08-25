@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import platform
-import socket
 import ssl
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -51,6 +50,11 @@ from ohana_katsuyu.models import (
     WorkerDocument,
     WorkerRegistration,
 )
+from ohana_katsuyu.pairing import (
+    canonical_worker_id,
+    default_worker_id,
+    wake_on_lan_mac_address,
+)
 from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.updates import refresh_update_status
 
@@ -80,9 +84,23 @@ class AgentClient:
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
 
-    def register(self, payload: dict[str, Any]) -> WorkerDocument:
+    def register(
+        self,
+        payload: dict[str, Any],
+        *,
+        previous_worker_id: str | None = None,
+    ) -> WorkerDocument:
+        extra_headers = (
+            {"X-Ohana-Previous-Worker-Id": previous_worker_id}
+            if previous_worker_id
+            else None
+        )
         return WorkerDocument.model_validate(
-            self._post("/v1/jobs/workers/register", payload)
+            self._post(
+                "/v1/jobs/workers/register",
+                payload,
+                extra_headers=extra_headers,
+            )
         )
 
     def claim(self, payload: dict[str, Any]) -> JobClaimResult:
@@ -255,15 +273,24 @@ class AgentClient:
             raise RuntimeError("Katsuyu HTTPS CA certificate is missing")
         return ssl.create_default_context(cafile=self.ca_certificate_file)
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
         request = Request(
             url=f"{self.base_url.rstrip('/')}{path}",
             data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             method="POST",
         )
         try:
@@ -303,6 +330,7 @@ class KatsuyuWorker:
     handlers: dict[str, KatsuyuHandler]
     heartbeat_seconds: float = 5.0
     status_store: StatusStore | None = None
+    previous_worker_id: str | None = None
 
     def register(self) -> WorkerDocument:
         request = WorkerRegistration(
@@ -310,8 +338,19 @@ class KatsuyuWorker:
             capabilities=sorted(self.handlers),
             platform=f"{platform.system()} {platform.release()}".strip(),
             worker_version=__version__,
+            wake_on_lan_mac_address=wake_on_lan_mac_address(
+                getattr(self.client, "base_url", "")
+            ),
         )
-        document = self.client.register(request.model_dump(mode="json"))
+        payload = request.model_dump(mode="json")
+        if self.previous_worker_id:
+            document = self.client.register(
+                payload,
+                previous_worker_id=self.previous_worker_id,
+            )
+            self.previous_worker_id = None
+        else:
+            document = self.client.register(payload)
         if self.status_store is not None:
             self.status_store.write(
                 state="connected",
@@ -483,7 +522,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--ai-model-sha256")
     parser.add_argument("--ai-context-size", type=int, default=8192)
-    parser.add_argument("--worker-id", default=socket.gethostname())
+    parser.add_argument("--worker-id", default=default_worker_id())
+    parser.set_defaults(previous_worker_id=None)
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--heartbeat-seconds", type=float, default=5.0)
     parser.add_argument("--once", action="store_true")
@@ -516,6 +556,10 @@ def apply_configuration(arguments: argparse.Namespace) -> None:
         if not isinstance(value, str) or not value.strip():
             raise SystemExit(f"Worker configuration field {field} is missing")
         setattr(arguments, field, value.strip())
+    canonical = canonical_worker_id(arguments.worker_id)
+    if canonical != arguments.worker_id:
+        arguments.previous_worker_id = arguments.worker_id
+        arguments.worker_id = canonical
     for field in path_fields:
         value = document.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -609,6 +653,7 @@ def main() -> None:
         handlers=handlers,
         heartbeat_seconds=arguments.heartbeat_seconds,
         status_store=StatusStore(arguments.status_file),
+        previous_worker_id=arguments.previous_worker_id,
     )
     while True:
         try:

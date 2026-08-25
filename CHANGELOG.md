@@ -2,6 +2,27 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.7.0] — Identité canonique et Wake-on-LAN — 2026-08-25
+
+### Ajouté
+
+- Katsuyu détecte l'adresse MAC physique de l'interface Windows réellement
+  utilisée pour joindre Agent et l'annonce avec ses capacités lors de
+  l'enregistrement worker.
+- L'enregistrement peut annoncer explicitement l'ancien `worker_id` pendant
+  une migration afin qu'Agent conserve le jeton d'appairage existant.
+
+### Modifié
+
+- Les nouvelles identités générées à partir du nom Windows sont normalisées en
+  minuscules ; `Bubule` devient donc `katsuyu-bubule`.
+
+### Compatibilité
+
+- Une installation existante `katsuyu-Bubule` est convertie lors de la mise à
+  jour sans nouvel appairage, à condition qu'Agent 1.25.0 ou supérieur soit
+  installé avant Katsuyu 0.7.0.
+
 ## [0.6.3] — Collecte des journaux HAOS — 2026-08-24
 
 ### Corrigé

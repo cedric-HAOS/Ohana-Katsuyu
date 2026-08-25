@@ -29,9 +29,11 @@ from ohana_katsuyu.ai_install import AiInstallation, provision_ai
 from ohana_katsuyu.handlers import HANDLER_TYPES
 from ohana_katsuyu.pairing import (
     PairingClient,
+    canonical_worker_id,
     default_worker_id,
     format_fingerprint,
     normalize_agent_url,
+    wake_on_lan_mac_address,
 )
 from ohana_katsuyu.updates import version_key
 from ohana_katsuyu.windows import build_parser as build_windows_parser
@@ -321,6 +323,7 @@ def install(
     if enable_ai:
         capabilities.append("ai.inference")
     pairing_client = None
+    previous_worker_id = None
     if not secure_existing:
         base_url = normalize_agent_url(agent_address)
         worker_id = default_worker_id()
@@ -335,7 +338,9 @@ def install(
     else:
         assert existing is not None
         base_url = existing.base_url
-        worker_id = existing.worker_id
+        worker_id = canonical_worker_id(existing.worker_id)
+        if worker_id != existing.worker_id:
+            previous_worker_id = existing.worker_id
         token = existing.token
 
     source = payload_root()
@@ -365,6 +370,7 @@ def install(
     status_file = state_root / "status.json"
     log_file = logs / "katsuyu.log"
     config_file = state_root / "config.json"
+    previous_config = config_file.read_bytes() if config_file.is_file() else None
     configuration = {
         "base_url": base_url,
         "worker_id": worker_id,
@@ -401,15 +407,29 @@ def install(
         private_directories,
     )
 
-    AgentClient(base_url, token, ca_certificate_file=ca_file).register(
-        {
-            "protocol_version": 1,
-            "worker_id": worker_id,
-            "capabilities": sorted(capabilities),
-            "platform": "Windows",
-            "worker_version": __version__,
-        }
-    )
+    registration = {
+        "protocol_version": 1,
+        "worker_id": worker_id,
+        "capabilities": sorted(capabilities),
+        "platform": "Windows",
+        "worker_version": __version__,
+        "wake_on_lan_mac_address": wake_on_lan_mac_address(base_url),
+    }
+    agent_client = AgentClient(base_url, token, ca_certificate_file=ca_file)
+    try:
+        if previous_worker_id:
+            agent_client.register(
+                registration,
+                previous_worker_id=previous_worker_id,
+            )
+        else:
+            agent_client.register(registration)
+    except Exception:
+        if previous_config is None:
+            config_file.unlink(missing_ok=True)
+        else:
+            config_file.write_bytes(previous_config)
+        raise
     if existing is not None:
         stop_running_components()
     backup_root = replace_payload(source, binary_root, state_root, required)

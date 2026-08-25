@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from io import BytesIO
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +29,50 @@ from ohana_katsuyu.worker import (
     apply_configuration,
     build_parser,
 )
+
+
+def test_agent_client_sends_previous_worker_identity_only_for_migration(
+    monkeypatch: Any,
+) -> None:
+    requests: list[Any] = []
+    now = datetime.now(UTC).isoformat()
+
+    class Response(BytesIO):
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_urlopen(request: Any, **_kwargs: object) -> Response:
+        requests.append(request)
+        body = json.dumps(
+            {
+                "protocol_version": 1,
+                "worker_id": "katsuyu-bubule",
+                "capabilities": ["system.health"],
+                "platform": "Windows 11",
+                "worker_version": "0.6.4",
+                "registered_at": now,
+                "last_seen_at": now,
+                "availability": "AVAILABLE",
+            }
+        ).encode()
+        return Response(body)
+
+    monkeypatch.setattr("ohana_katsuyu.worker.urlopen", fake_urlopen)
+    client = AgentClient("http://infra-01.ohana.lan:8766", "worker-secret")
+    client.register(
+        {
+            "worker_id": "katsuyu-bubule",
+            "capabilities": ["system.health"],
+            "platform": "Windows 11",
+            "worker_version": "0.6.4",
+        },
+        previous_worker_id="katsuyu-Bubule",
+    )
+
+    assert requests[0].get_header("X-ohana-previous-worker-id") == "katsuyu-Bubule"
 
 
 def test_worker_loads_bounded_setup_configuration(tmp_path) -> None:
@@ -55,7 +100,8 @@ def test_worker_loads_bounded_setup_configuration(tmp_path) -> None:
     apply_configuration(arguments)
 
     assert arguments.base_url == "https://infra-01.ohana.lan:8766"
-    assert arguments.worker_id == "katsuyu-Bubule"
+    assert arguments.worker_id == "katsuyu-bubule"
+    assert arguments.previous_worker_id == "katsuyu-Bubule"
     for name, path in paths.items():
         assert getattr(arguments, name) == path
 

@@ -93,10 +93,16 @@ La désinstallation Windows arrête Katsuyu, retire le jeton, les exécutables e
 les composants IA, mais conserve volontairement les logs et le workspace.
 
 `KatsuyuSetup.exe` détecte l'installation existante, réutilise son adresse
-Agent, son identité et son jeton, arrête proprement le worker et l'icône,
+Agent et son jeton, normalise l'identité historique en `katsuyu-bubule`,
+arrête proprement le worker et l'icône,
 remplace les exécutables avec sauvegarde de retour arrière, puis redémarre
 Katsuyu. Les logs, le workspace, l'appairage et le modèle IA vérifié sont
 conservés.
+
+À chaque enregistrement, Katsuyu identifie également l'interface Windows
+utilisée pour joindre Agent et annonce sa MAC physique pour le Wake-on-LAN.
+Cette donnée est découverte sur Bubule ; elle n'a donc plus à être recopiée
+manuellement dans la configuration d'Agent.
 
 ## Mise à jour
 

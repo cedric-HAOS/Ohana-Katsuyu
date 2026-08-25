@@ -97,6 +97,10 @@ class WorkerRegistration(ProtocolModel):
     capabilities: list[str] = Field(min_length=1, max_length=32)
     platform: str = Field(min_length=1, max_length=100)
     worker_version: str = Field(min_length=1, max_length=40)
+    wake_on_lan_mac_address: str | None = Field(
+        default=None,
+        pattern=r"^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$",
+    )
 
 
 class WorkerDocument(WorkerRegistration):

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import platform
 import socket
 import ssl
+import subprocess
 from dataclasses import dataclass
 from time import monotonic, sleep
 from typing import Any
@@ -239,4 +241,65 @@ def default_worker_id() -> str:
         character if character.isalnum() or character in "_.:-" else "-"
         for character in hostname
     )
-    return f"katsuyu-{safe}"[:80]
+    return f"katsuyu-{safe}"[:80].lower()
+
+
+def canonical_worker_id(value: str) -> str:
+    """Normalize an existing Katsuyu identity without inventing a new one."""
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError("L’identifiant Katsuyu est vide.")
+    return normalized
+
+
+def wake_on_lan_mac_address(base_url: str) -> str | None:
+    """Return the physical MAC of the Windows interface used to reach Agent."""
+    if platform.system() != "Windows":
+        return None
+    parsed = urlsplit(base_url)
+    if not parsed.hostname:
+        return None
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+            route.connect((parsed.hostname, parsed.port or 8766))
+            local_ip = str(ipaddress.IPv4Address(route.getsockname()[0]))
+    except (OSError, ipaddress.AddressValueError):
+        return None
+
+    command = (
+        "$ip = Get-NetIPAddress -AddressFamily IPv4 "
+        f"-IPAddress '{local_ip}' -ErrorAction Stop | Select-Object -First 1; "
+        "$adapter = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex "
+        "-ErrorAction Stop; "
+        "if (-not $adapter.HardwareInterface -or $adapter.Status -ne 'Up') { exit 2 }; "
+        "if ($null -ne $adapter) { $adapter.MacAddress }"
+    )
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    raw = completed.stdout.strip().splitlines()
+    if not raw:
+        return None
+    normalized = raw[0].strip().replace("-", ":").upper()
+    compact = normalized.replace(":", "")
+    if len(compact) != 12 or any(
+        character not in "0123456789ABCDEF" for character in compact
+    ):
+        return None
+    return ":".join(compact[index : index + 2] for index in range(0, 12, 2))

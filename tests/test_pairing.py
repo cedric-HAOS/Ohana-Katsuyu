@@ -14,11 +14,15 @@ from typing import Any
 
 import pytest
 
+from ohana_katsuyu import pairing
 from ohana_katsuyu.pairing import (
     PairingClient,
     WorkerTrust,
+    canonical_worker_id,
     certificate_sha256,
+    default_worker_id,
     normalize_agent_url,
+    wake_on_lan_mac_address,
 )
 
 
@@ -36,6 +40,46 @@ def test_normalize_agent_url_keeps_installer_input_minimal() -> None:
         normalize_agent_url("")
     with pytest.raises(ValueError, match="HTTPS"):
         normalize_agent_url("http://192.168.1.10:8765")
+
+
+def test_worker_identity_is_canonical_and_lowercase(monkeypatch: Any) -> None:
+    monkeypatch.setattr(pairing.socket, "gethostname", lambda: "Bubule")
+
+    assert default_worker_id() == "katsuyu-bubule"
+    assert canonical_worker_id(" katsuyu-Bubule ") == "katsuyu-bubule"
+
+
+def test_wake_on_lan_mac_uses_interface_that_routes_to_agent(
+    monkeypatch: Any,
+) -> None:
+    class FakeRoute:
+        def __enter__(self) -> FakeRoute:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def connect(self, address: tuple[str, int]) -> None:
+            assert address == ("infra-01.ohana.lan", 8766)
+
+        def getsockname(self) -> tuple[str, int]:
+            return ("192.168.1.42", 50000)
+
+    class Completed:
+        returncode = 0
+        stdout = "AA-BB-CC-DD-EE-FF\n"
+
+    monkeypatch.setattr(pairing.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(pairing.socket, "socket", lambda *_args: FakeRoute())
+    monkeypatch.setattr(
+        pairing.subprocess,
+        "run",
+        lambda *_args, **_kwargs: Completed(),
+    )
+
+    assert wake_on_lan_mac_address("https://infra-01.ohana.lan:8766") == (
+        "AA:BB:CC:DD:EE:FF"
+    )
 
 
 def test_pairing_never_uses_an_administration_or_worker_token(

@@ -134,7 +134,7 @@ def test_installer_refuses_to_downgrade_existing_katsuyu(
     monkeypatch: Any,
 ) -> None:
     monkeypatch.setattr(setup, "require_administrator", lambda: None)
-    monkeypatch.setattr(setup, "installed_version", lambda: "0.7.0")
+    monkeypatch.setattr(setup, "installed_version", lambda: "0.8.0")
 
     with pytest.raises(RuntimeError, match="plus récente"):
         setup.install("infra-01.ohana.lan")
@@ -158,12 +158,12 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
     (state / "status.json").write_text('{"state":"connected"}', encoding="utf-8")
     existing = setup.ExistingInstallation(
         "https://infra-01.ohana.lan:8766",
-        "bubule",
+        "katsuyu-Bubule",
         "existing-token",
         state / "agent-ca.pem",
     )
     (state / "agent-ca.pem").write_text("public certificate", encoding="utf-8")
-    registrations: list[tuple[str, dict[str, object]]] = []
+    registrations: list[tuple[str, dict[str, object], str | None]] = []
     stopped: list[bool] = []
 
     class FakeAgentClient:
@@ -177,8 +177,13 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
             self.token = token
             assert ca_certificate_file == state / "agent-ca.pem"
 
-        def register(self, document: dict[str, object]) -> None:
-            registrations.append((self.token, document))
+        def register(
+            self,
+            document: dict[str, object],
+            *,
+            previous_worker_id: str | None = None,
+        ) -> None:
+            registrations.append((self.token, document, previous_worker_id))
 
     monkeypatch.setattr(setup, "require_administrator", lambda: None)
     monkeypatch.setattr(setup, "installed_version", lambda: "0.1.0")
@@ -204,7 +209,11 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
 
     assert stopped == [True]
     assert registrations[0][0] == "existing-token"
-    assert registrations[0][1]["worker_version"] == "0.6.3"
+    assert registrations[0][1]["worker_version"] == "0.7.0"
+    assert registrations[0][1]["worker_id"] == "katsuyu-bubule"
+    assert registrations[0][2] == "katsuyu-Bubule"
+    configuration = json.loads((state / "config.json").read_text(encoding="utf-8"))
+    assert configuration["worker_id"] == "katsuyu-bubule"
     assert (state / "status.json").read_text(encoding="utf-8") == (
         '{"state":"connected"}'
     )
