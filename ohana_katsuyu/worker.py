@@ -12,7 +12,7 @@ import ssl
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -55,6 +55,7 @@ from ohana_katsuyu.pairing import (
     default_worker_id,
     wake_on_lan_mac_address,
 )
+from ohana_katsuyu.power import request_system_shutdown
 from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.updates import refresh_update_status
 
@@ -331,6 +332,12 @@ class KatsuyuWorker:
     heartbeat_seconds: float = 5.0
     status_store: StatusStore | None = None
     previous_worker_id: str | None = None
+    shutdown_requester: Callable[[], None] | None = None
+    _shutdown_requested: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def shutdown_requested(self) -> bool:
+        return self._shutdown_requested
 
     def register(self) -> WorkerDocument:
         request = WorkerRegistration(
@@ -448,7 +455,19 @@ class KatsuyuWorker:
             return True
         self.client.complete(str(job.job_id), completion.model_dump(mode="json"))
         self._publish_connected_status()
+        if job.shutdown_after_completion:
+            self._request_shutdown()
         return True
+
+    def _request_shutdown(self) -> None:
+        self._shutdown_requested = True
+        if self.shutdown_requester is None:
+            LOGGER.warning("Agent requested shutdown, but no shutdown handler is set")
+            return
+        try:
+            self.shutdown_requester()
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Unable to request Windows shutdown after Katsuyu job")
 
     def _publish_connected_status(self) -> None:
         if self.status_store is not None:
@@ -551,32 +570,32 @@ def apply_configuration(arguments: argparse.Namespace) -> None:
     )
     optional_path_fields = ("ai_runtime", "ai_model")
     optional_string_fields = ("ai_model_id", "ai_model_sha256")
-    for field in string_fields:
-        value = document.get(field)
+    for field_name in string_fields:
+        value = document.get(field_name)
         if not isinstance(value, str) or not value.strip():
-            raise SystemExit(f"Worker configuration field {field} is missing")
-        setattr(arguments, field, value.strip())
+            raise SystemExit(f"Worker configuration field {field_name} is missing")
+        setattr(arguments, field_name, value.strip())
     canonical = canonical_worker_id(arguments.worker_id)
     if canonical != arguments.worker_id:
         arguments.previous_worker_id = arguments.worker_id
         arguments.worker_id = canonical
-    for field in path_fields:
-        value = document.get(field)
+    for field_name in path_fields:
+        value = document.get(field_name)
         if not isinstance(value, str) or not value.strip():
-            raise SystemExit(f"Worker configuration field {field} is missing")
-        setattr(arguments, field, Path(value))
-    for field in optional_path_fields:
-        value = document.get(field)
+            raise SystemExit(f"Worker configuration field {field_name} is missing")
+        setattr(arguments, field_name, Path(value))
+    for field_name in optional_path_fields:
+        value = document.get(field_name)
         if value is not None:
             if not isinstance(value, str) or not value.strip():
-                raise SystemExit(f"Worker configuration field {field} is invalid")
-            setattr(arguments, field, Path(value))
-    for field in optional_string_fields:
-        value = document.get(field)
+                raise SystemExit(f"Worker configuration field {field_name} is invalid")
+            setattr(arguments, field_name, Path(value))
+    for field_name in optional_string_fields:
+        value = document.get(field_name)
         if value is not None:
             if not isinstance(value, str) or not value.strip():
-                raise SystemExit(f"Worker configuration field {field} is invalid")
-            setattr(arguments, field, value.strip())
+                raise SystemExit(f"Worker configuration field {field_name} is invalid")
+            setattr(arguments, field_name, value.strip())
     if "ai_context_size" in document:
         value = document["ai_context_size"]
         if not isinstance(value, int):
@@ -654,6 +673,7 @@ def main() -> None:
         heartbeat_seconds=arguments.heartbeat_seconds,
         status_store=StatusStore(arguments.status_file),
         previous_worker_id=arguments.previous_worker_id,
+        shutdown_requester=request_system_shutdown,
     )
     while True:
         try:
@@ -673,6 +693,8 @@ def main() -> None:
     while True:
         try:
             processed = worker.run_once()
+            if worker.shutdown_requested:
+                return
         except RuntimeError:
             LOGGER.exception("Katsuyu polling cycle failed")
             worker.status_store.write(

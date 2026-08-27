@@ -134,7 +134,7 @@ def test_installer_refuses_to_downgrade_existing_katsuyu(
     monkeypatch: Any,
 ) -> None:
     monkeypatch.setattr(setup, "require_administrator", lambda: None)
-    monkeypatch.setattr(setup, "installed_version", lambda: "0.8.0")
+    monkeypatch.setattr(setup, "installed_version", lambda: "0.9.0")
 
     with pytest.raises(RuntimeError, match="plus récente"):
         setup.install("infra-01.ohana.lan")
@@ -214,7 +214,7 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
 
     assert stopped == [True]
     assert registrations[0][0] == "existing-token"
-    assert registrations[0][1]["worker_version"] == "0.7.0"
+    assert registrations[0][1]["worker_version"] == "0.8.0"
     assert registrations[0][1]["worker_id"] == "katsuyu-bubule"
     assert registrations[0][1]["wake_on_lan_mac_address"] == "AA:BB:CC:DD:EE:FF"
     assert registrations[0][2] == "katsuyu-Bubule"

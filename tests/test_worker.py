@@ -174,6 +174,24 @@ def test_worker_registers_and_claims_only_its_allowlist() -> None:
     assert client.completions[-1][1]["status"] == "SUCCEEDED"
 
 
+def test_worker_requests_shutdown_after_final_ohana_job() -> None:
+    calls: list[str] = []
+    client = FakeClient(
+        job_document().model_copy(update={"shutdown_after_completion": True})
+    )
+    worker = KatsuyuWorker(
+        client=cast(AgentClient, client),
+        worker_id="katsuyu-bubule",
+        handlers={"system.health": SuccessHandler()},
+        shutdown_requester=lambda: calls.append("shutdown"),
+    )
+
+    assert worker.run_once() is True
+
+    assert client.completions[-1][1]["status"] == "SUCCEEDED"
+    assert calls == ["shutdown"]
+
+
 def test_worker_keeps_local_status_fresh_when_no_job_is_available(
     tmp_path: Path,
 ) -> None:

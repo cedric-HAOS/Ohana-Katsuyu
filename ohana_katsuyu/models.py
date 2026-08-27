@@ -56,6 +56,7 @@ class JobDocument(ProtocolModel):
     attempt: int = Field(default=0, ge=0)
     lease_expires_at: datetime | None = None
     progress: JobProgress | None = None
+    shutdown_after_completion: bool = False
 
 
 class JobClaim(ProtocolModel):
