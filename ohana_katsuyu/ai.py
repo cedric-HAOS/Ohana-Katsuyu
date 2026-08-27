@@ -122,6 +122,31 @@ DIAGNOSTIC_SCHEMA: dict[str, Any] = {
 }
 
 
+def _llama_runtime_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Strip validation hints that llama.cpp may turn into invalid GBNF."""
+
+    risky_keywords = {"maxLength", "minLength", "pattern"}
+
+    def simplify(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: simplify(nested)
+                for key, nested in value.items()
+                if key not in risky_keywords
+            }
+        if isinstance(value, list):
+            return [simplify(item) for item in value]
+        return value
+
+    simplified = simplify(schema)
+    if not isinstance(simplified, dict):  # pragma: no cover - schema is static.
+        raise TypeError("diagnostic schema simplification did not return an object")
+    return simplified
+
+
+LLAMA_DIAGNOSTIC_SCHEMA = _llama_runtime_schema(DIAGNOSTIC_SCHEMA)
+
+
 def _free_local_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -272,7 +297,7 @@ class AiInferenceHandler:
                 "json_schema": {
                     "name": "katsuyu_diagnosis",
                     "strict": True,
-                    "schema": DIAGNOSTIC_SCHEMA,
+                    "schema": LLAMA_DIAGNOSTIC_SCHEMA,
                 },
             },
         }

@@ -10,7 +10,11 @@ from threading import Thread
 import pytest
 from pydantic import ValidationError
 
-from ohana_katsuyu.ai import DIAGNOSTIC_SCHEMA, AiInferenceHandler
+from ohana_katsuyu.ai import (
+    DIAGNOSTIC_SCHEMA,
+    LLAMA_DIAGNOSTIC_SCHEMA,
+    AiInferenceHandler,
+)
 from ohana_katsuyu.handlers import HandlerContext
 from ohana_katsuyu.models import AiInferenceParameters, AiInferenceResult
 
@@ -91,6 +95,21 @@ def test_runtime_schema_requires_advanced_hypothesis_contract() -> None:
     assert "analysis_version" in DIAGNOSTIC_SCHEMA["required"]
 
 
+def test_llama_runtime_schema_avoids_gbnf_incompatible_validation_hints() -> None:
+    encoded_runtime = json.dumps(LLAMA_DIAGNOSTIC_SCHEMA)
+
+    assert '"maxLength"' not in encoded_runtime
+    assert '"minLength"' not in encoded_runtime
+    assert '"pattern"' not in encoded_runtime
+    assert DIAGNOSTIC_SCHEMA["properties"]["interpretation"]["maxLength"] == 2000
+    assert (
+        DIAGNOSTIC_SCHEMA["properties"]["findings"]["items"]["properties"]["code"][
+            "pattern"
+        ]
+        == "^[A-Z0-9_.-]+$"
+    )
+
+
 def test_streaming_runtime_response_is_measured_and_parsed(tmp_path: Path) -> None:
     document = {
         "analysis_version": 2,
@@ -120,6 +139,9 @@ def test_streaming_runtime_response_is_measured_and_parsed(tmp_path: Path) -> No
             assert payload["temperature"] == 0
             assert payload["messages"][1]["content"].startswith(
                 "EVIDENCE source='HA-01'"
+            )
+            assert "maxLength" not in json.dumps(
+                payload["response_format"]["json_schema"]["schema"]
             )
             encoded = body.encode()
             self.send_response(200)

@@ -2,6 +2,19 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.8.1] — Compatibilité IA llama.cpp — 2026-08-27
+
+### Corrigé
+
+- Le schéma envoyé au runtime local `llama.cpp` est simplifié afin d'éviter
+  l'erreur `Failed to initialize samplers: failed to parse grammar` observée
+  avant génération sur les jobs `ai.inference`.
+- Katsuyu conserve le contrat strict de validation locale après génération :
+  les tailles, motifs et cohérences du diagnostic restent vérifiés par
+  Pydantic avant retour à Tsunade.
+- Le benchmark IA utilise désormais le même schéma runtime que le handler de
+  production pour éviter une divergence entre validation et exécution réelle.
+
 ## [0.7.0] — Identité canonique et Wake-on-LAN — 2026-08-25
 
 ### Ajouté
