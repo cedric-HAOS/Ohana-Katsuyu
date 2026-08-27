@@ -41,7 +41,7 @@ CUDA_URL = (
 )
 CUDA_SHA256 = "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e"
 CUDA_SIZE = 390_970_417
-CONTEXT_SIZE = 8192
+CONTEXT_SIZE = 32768
 AI_SERVER_FILENAME = "KatsuyuAiServer.exe"
 
 ProgressCallback = Callable[[str, int, int], None]
@@ -193,11 +193,24 @@ def provision_ai(
     runtime = runtime_root / AI_SERVER_FILENAME
     manifest = ai_root / "install.json"
     expected_manifest = _manifest_document()
+    installed_manifest = _read_manifest(manifest)
+    compatible_manifest = installed_manifest is not None and {
+        key: value for key, value in installed_manifest.items() if key != "context_size"
+    } == {
+        key: value for key, value in expected_manifest.items() if key != "context_size"
+    }
     if (
-        _read_manifest(manifest) == expected_manifest
+        compatible_manifest
         and runtime.is_file()
         and _verified_file(model, MODEL_ARTIFACT)
     ):
+        if installed_manifest != expected_manifest:
+            temporary_manifest = manifest.with_suffix(".json.new")
+            temporary_manifest.write_text(
+                json.dumps(expected_manifest, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            os.replace(temporary_manifest, manifest)
         if on_progress is not None:
             on_progress("IA locale déjà vérifiée", MODEL_SIZE, MODEL_SIZE)
         return AiInstallation(

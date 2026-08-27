@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -138,12 +139,20 @@ def test_provision_ai_activates_verified_payload_and_reuses_it(
     monkeypatch.setattr(ai_install, "download_verified", fake_download)
 
     installed = ai_install.provision_ai(tmp_path / "state")
+    manifest_path = tmp_path / "state" / "ai" / "install.json"
+    legacy_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    legacy_manifest["context_size"] = 8_192
+    manifest_path.write_text(json.dumps(legacy_manifest), encoding="utf-8")
     reused = ai_install.provision_ai(tmp_path / "state")
 
     assert installed == reused
     assert installed.runtime.name == "KatsuyuAiServer.exe"
     assert installed.runtime.read_bytes() == b"server"
     assert installed.model.read_bytes() == model_content
+    assert reused.context_size == 32_768
+    assert (
+        json.loads(manifest_path.read_text(encoding="utf-8"))["context_size"] == 32_768
+    )
     assert calls == [
         ai_install.RUNTIME_ARTIFACT.name,
         ai_install.CUDA_ARTIFACT.name,

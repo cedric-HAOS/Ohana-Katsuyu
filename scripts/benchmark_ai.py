@@ -355,6 +355,7 @@ def case_payload(
         "temperature": 0,
         "max_tokens": max_tokens,
         "seed": 42,
+        "chat_template_kwargs": {"enable_thinking": False},
         "cache_prompt": False,
     }
     if case["mode"] == "diagnosis":
@@ -493,7 +494,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--output", type=Path, required=True)
     result.add_argument("--startup-timeout", type=int, default=300)
     result.add_argument("--request-timeout", type=int, default=300)
-    result.add_argument("--max-tokens", type=int, default=1024)
+    result.add_argument("--max-tokens", type=int, default=8192)
     result.add_argument("--repetitions", type=int, default=1)
     return result
 

@@ -2,6 +2,21 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.8.3] — JSON d’analyse fiable — 2026-08-27
+
+### Corrigé
+
+- Les diagnostics structurés désactivent la réflexion interne du modèle afin
+  de réserver la sortie au JSON attendu par Tsunade.
+- La fenêtre locale passe à 32 768 jetons, Tsunade en demande jusqu’à 8 192 et
+  le contrat accepte jusqu’à 16 384 jetons pour les analyses plus développées.
+- Katsuyu réduit automatiquement la sortie lorsque les preuves occupent une
+  part plus importante de la fenêtre de contexte.
+- Une mise à jour réutilise le modèle déjà vérifié sans téléchargement inutile
+  lorsque seule la taille de contexte change.
+- Katsuyu distingue désormais une réponse vide, une troncature à la limite de
+  jetons et un JSON réellement invalide dans l’erreur remontée à Agent.
+
 ## [0.8.2] — Références Home Assistant exploitables — 2026-08-27
 
 ### Corrigé

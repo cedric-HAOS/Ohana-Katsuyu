@@ -540,7 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ai-model-id", default="ministral-3-14b-reasoning-2512-q4-k-m"
     )
     parser.add_argument("--ai-model-sha256")
-    parser.add_argument("--ai-context-size", type=int, default=8192)
+    parser.add_argument("--ai-context-size", type=int, default=32768)
     parser.add_argument("--worker-id", default=default_worker_id())
     parser.set_defaults(previous_worker_id=None)
     parser.add_argument("--poll-seconds", type=float, default=10.0)

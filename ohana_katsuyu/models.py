@@ -332,7 +332,7 @@ class AiInferenceParameters(ProtocolModel):
     incident_id: UUID
     question: str = Field(min_length=1, max_length=2_000)
     evidence: list[AiInferenceEvidence] = Field(min_length=1, max_length=8)
-    max_output_tokens: int = Field(default=1_024, ge=128, le=1_024)
+    max_output_tokens: int = Field(default=8_192, ge=128, le=16_384)
 
     @model_validator(mode="after")
     def bound_total_evidence(self) -> Self:

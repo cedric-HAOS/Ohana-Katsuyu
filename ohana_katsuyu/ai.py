@@ -161,7 +161,7 @@ class AiInferenceHandler:
     model: Path
     model_id: str
     model_sha256: str
-    context_size: int = 8192
+    context_size: int = 32768
     startup_timeout_seconds: float = 60
     _verified: bool = field(default=False, init=False)
 
@@ -278,18 +278,23 @@ class AiInferenceHandler:
             f"EVIDENCE source={item.source!r}:\n{item.content}"
             for item in request.evidence
         )
+        user_content = f"{evidence}\n\nQUESTION:\n{request.question}"
+        max_tokens = self._completion_token_budget(
+            f"{SYSTEM_PROMPT}\n{user_content}", request.max_output_tokens
+        )
         payload = {
             "model": self.model_id,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"{evidence}\n\nQUESTION:\n{request.question}",
+                    "content": user_content,
                 },
             ],
             "temperature": 0,
             "seed": 42,
-            "max_tokens": request.max_output_tokens,
+            "max_tokens": max_tokens,
+            "chat_template_kwargs": {"enable_thinking": False},
             "stream": True,
             "stream_options": {"include_usage": True},
             "response_format": {
@@ -311,6 +316,7 @@ class AiInferenceHandler:
         first_token_at: float | None = None
         content: list[str] = []
         usage: dict[str, Any] = {}
+        finish_reason: str | None = None
         try:
             with urllib.request.urlopen(http_request, timeout=10) as response:
                 for raw_line in response:
@@ -327,7 +333,10 @@ class AiInferenceHandler:
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue
-                    delta = choices[0].get("delta") or {}
+                    choice = choices[0]
+                    if isinstance(choice.get("finish_reason"), str):
+                        finish_reason = choice["finish_reason"]
+                    delta = choice.get("delta") or {}
                     text = delta.get("content")
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                     if first_token_at is None and (text or reasoning):
@@ -344,9 +353,20 @@ class AiInferenceHandler:
             raise RuntimeError(f"local AI inference failed: {error}") from error
         finished = time.perf_counter()
         context.check()
+        raw_document = "".join(content)
+        if not raw_document.strip():
+            if finish_reason == "length":
+                raise RuntimeError(
+                    "local AI structured JSON was truncated at the output token limit"
+                )
+            raise RuntimeError("local AI returned no structured JSON content")
         try:
-            document = json.loads("".join(content))
+            document = json.loads(raw_document)
         except json.JSONDecodeError as error:
+            if finish_reason == "length":
+                raise RuntimeError(
+                    "local AI structured JSON was truncated at the output token limit"
+                ) from error
             raise RuntimeError("local AI returned invalid structured JSON") from error
         completion_tokens = int(usage.get("completion_tokens") or 0)
         generation_seconds = finished - (first_token_at or started)
@@ -364,3 +384,10 @@ class AiInferenceHandler:
                 "duration_seconds": finished - started,
             },
         }
+
+    def _completion_token_budget(self, prompt: str, requested: int) -> int:
+        estimated_prompt_tokens = (len(prompt.encode("utf-8")) + 1) // 2
+        available = self.context_size - estimated_prompt_tokens - 1_024
+        if available < 128:
+            raise RuntimeError("bounded AI evidence exceeds the local context window")
+        return min(requested, available)
