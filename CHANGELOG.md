@@ -2,6 +2,15 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.8.2] — Références Home Assistant exploitables — 2026-08-27
+
+### Corrigé
+
+- L’analyse déterministe des journaux conserve séparément les identifiants
+  d’entité Home Assistant présents dans chaque anomalie groupée.
+- Tsunade peut ainsi produire une vérification ciblée sans exposer la ligne de
+  journal brute ni dépendre de l’état instantané du capteur.
+
 ## [0.8.1] — Compatibilité IA llama.cpp — 2026-08-27
 
 ### Corrigé

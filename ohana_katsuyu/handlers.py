@@ -164,6 +164,7 @@ _VARIABLE = re.compile(
     r"\d{1,3}(?:\.\d{1,3}){3}|\d+)\b",
     re.IGNORECASE,
 )
+_ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b", re.IGNORECASE)
 
 
 def _parse_log_timestamp(line: str) -> datetime | None:
@@ -212,6 +213,13 @@ def _signature(line: str) -> str:
     normalized = _VARIABLE.sub("<value>", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized[:160] or "unclassified log anomaly"
+
+
+def _references(line: str) -> list[str]:
+    """Keep bounded Home Assistant entity IDs without exposing raw log lines."""
+    return list(dict.fromkeys(match.casefold() for match in _ENTITY_ID.findall(line)))[
+        :16
+    ]
 
 
 def _severity(line: str) -> str:
@@ -538,6 +546,7 @@ class LogsHealthCheckHandler:
                     category=_category(source, sample),
                     severity=_severity(sample),
                     summary=f"{signature} ({occurrences} occurrence(s))",
+                    references=_references(sample),
                     occurrences=occurrences,
                     reference_occurrences=previous,
                     first_at=min(observed) if observed else None,
@@ -604,6 +613,7 @@ class LogsInvestigateHandler:
                     category=_category(request.source, sample),
                     severity=_severity(sample),
                     summary=f"{signature} ({occurrences} occurrence(s))",
+                    references=_references(sample),
                     occurrences=occurrences,
                     first_at=min(observed) if observed else None,
                     last_at=max(observed) if observed else None,

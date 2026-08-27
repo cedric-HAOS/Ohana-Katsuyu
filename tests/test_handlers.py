@@ -97,6 +97,37 @@ def test_logs_health_check_groups_and_compares_without_llm(monkeypatch) -> None:
     assert result["new_anomaly_count"] == 0
 
 
+def test_logs_health_check_keeps_bounded_home_assistant_entity_references(
+    monkeypatch,
+) -> None:
+    content = (
+        b"2026-08-24T09:00:00+00:00 ERROR TemplateError: "
+        b"states('sensor.teleinfo_041964385922_easf02') failed for entity "
+        b"'sensor.linky_bleue_hp'\n"
+    )
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(content),
+    )
+
+    result = LogsHealthCheckHandler(_log_provider).execute(
+        {
+            "sources": ["ha-01"],
+            "window_started_at": "2026-08-24T00:00:00+00:00",
+            "window_ended_at": "2026-08-25T00:00:00+00:00",
+            "max_bytes_per_source": 4096,
+            "baseline": [],
+            "incident_id": None,
+        },
+        _log_context(),
+    )
+
+    assert result["sources"][0]["findings"][0]["references"] == [
+        "sensor.teleinfo_041964385922_easf02",
+        "sensor.linky_bleue_hp",
+    ]
+
+
 def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
     content = "\n".join(
         [

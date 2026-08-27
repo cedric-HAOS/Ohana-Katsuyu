@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ohana-katsuyu"
-version = "0.8.1"
+version = "0.8.2"
 description = "Deterministic Windows worker for Ohana-Agent distributed jobs."
 readme = "README.md"
 requires-python = ">=3.13"

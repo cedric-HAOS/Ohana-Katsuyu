@@ -274,6 +274,7 @@ class LogFinding(ProtocolModel):
     ]
     severity: Literal["warning", "error", "critical"]
     summary: str = Field(min_length=1, max_length=500)
+    references: list[str] = Field(default_factory=list, max_length=16)
     occurrences: int = Field(ge=1, le=1_000_000)
     reference_occurrences: int | None = Field(default=None, ge=0, le=1_000_000)
     first_at: datetime | None = None
