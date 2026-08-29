@@ -155,7 +155,8 @@ _TIMESTAMP = re.compile(
 _ANOMALY = re.compile(
     r"\b(error|exception|traceback|timeout|timed out|failed|failure|"
     r"disconnect(?:ed)?|reconnect(?:ed|ing)?|restart(?:ed|ing)?|unavailable|"
-    r"dead|serial|frame|interview|routing|mqtt|checksum invalid|"
+    r"connection refused|econnrefused|shutdown requested|stopping|stopped|"
+    r"starting|started|dead|serial|frame|interview|routing|mqtt|checksum invalid|"
     r"transmission failed)\b",
     re.IGNORECASE,
 )
@@ -200,7 +201,17 @@ def _category(source: str, line: str) -> str:
         ("automation", ("automation",)),
         ("timeout", ("timeout", "timed out")),
         ("network", ("network", "disconnect", "reconnect", "unavailable")),
-        ("restart", ("restart",)),
+        (
+            "restart",
+            (
+                "restart",
+                "shutdown requested",
+                "stopping",
+                "stopped",
+                "starting",
+                "started",
+            ),
+        ),
         ("exception", ("exception", "traceback")),
     ):
         if any(term in lowered for term in terms):
@@ -248,6 +259,18 @@ class _DirectLogReader:
         )
         if descriptor.get("source") != source:
             raise RuntimeError("Agent returned a mismatched log source")
+        if descriptor.get("transport") == "inline":
+            content = descriptor.get("content")
+            if not isinstance(content, str):
+                raise RuntimeError("Agent returned invalid inline log content")
+            payload = content.encode("utf-8")
+            truncated = bool(descriptor.get("truncated")) or len(payload) > max_bytes
+            bounded = payload[-max_bytes:]
+            return (
+                bounded.decode("utf-8", errors="replace").splitlines(),
+                len(bounded),
+                truncated,
+            )
         url = descriptor.get("url")
         token = descriptor.get("access_token")
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):

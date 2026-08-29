@@ -128,6 +128,45 @@ def test_logs_health_check_keeps_bounded_home_assistant_entity_references(
     ]
 
 
+def test_logs_health_check_reads_infra_journal_and_detects_service_lifecycle() -> None:
+    content = "\n".join(
+        (
+            "2026-08-29T09:14:04+02:00 Ohana-Agent shutdown requested.",
+            "2026-08-29T09:14:14+02:00 Stopped ohana-agent.service.",
+            "2026-08-29T09:16:44+02:00 Started ohana-agent.service.",
+        )
+    )
+
+    def provider(*_args) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "source": "infra-01",
+            "transport": "inline",
+            "content": content,
+            "truncated": False,
+        }
+
+    result = LogsHealthCheckHandler(provider).execute(
+        {
+            "sources": ["infra-01"],
+            "window_started_at": "2026-08-29T09:00:00+02:00",
+            "window_ended_at": "2026-08-29T10:00:00+02:00",
+            "max_bytes_per_source": 4096,
+            "baseline": [],
+            "incident_id": None,
+        },
+        _log_context(),
+    )
+
+    assert result["status"] == "KO"
+    assert result["sources"][0]["source"] == "infra-01"
+    assert result["sources"][0]["analyzed_lines"] == 3
+    assert len(result["sources"][0]["findings"]) == 3
+    assert {finding["category"] for finding in result["sources"][0]["findings"]} == {
+        "restart"
+    }
+
+
 def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
     content = "\n".join(
         [

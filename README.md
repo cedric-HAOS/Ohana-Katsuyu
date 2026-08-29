@@ -17,7 +17,7 @@ vérifie l'état observé.
 - `backup.verify` vérifie un SHA-256 et, facultativement, une taille.
 - `backup.infra` récupère le tar INFRA-01 lié au job, le compresse, le chiffre,
   le vérifie et renvoie l'artefact à Agent pour publication distante en flux.
-- `logs.health_check` récupère directement les journaux bornés de HA-01,
+- `logs.health_check` récupère les journaux bornés d’INFRA-01, HA-01,
   LINKY-01 et ZWAVE-01 puis renvoie uniquement une synthèse déterministe ;
 - `logs.investigate` analyse un motif ciblé après autorisation de Tsunade et
   renvoie uniquement des signatures normalisées et comptées.
@@ -26,7 +26,9 @@ Katsuyu fonctionne sans LLM. Tous les chemins de jobs sont relatifs à
 `C:\ProgramData\Ohana\Katsuyu\workspace`. Les chemins absolus, traversées `..`,
 liens symboliques et fichiers non réguliers sont refusés.
 
-La collecte des journaux privilégie l'API WebSocket native Home Assistant
+Pour INFRA-01, Agent transmet uniquement l’extrait journald borné et autorisé
+par le job, limité à `ohana-agent.service` et `ohana-vision.service`. Pour HAOS,
+la collecte privilégie l'API WebSocket native Home Assistant
 `supervisor/api` avec un jeton administrateur. Katsuyu découvre uniquement les
 add-ons dont le nom correspond à la cible (`teleinfo2mqtt` ou Z-Wave JS), lit
 leurs logs et ceux de Core, puis ferme la connexion. Le volume reste limité à

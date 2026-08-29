@@ -233,7 +233,7 @@ class AgentClient:
         attempt: int,
         source_id: str,
     ) -> dict[str, Any]:
-        """Read a job-bound HAOS descriptor without proxying journal bytes."""
+        """Read a job-bound descriptor for one bounded log source."""
         request = Request(
             url=(
                 f"{self.base_url.rstrip('/')}/v1/jobs/{quote(job_id, safe='')}"

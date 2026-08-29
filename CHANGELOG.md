@@ -2,6 +2,15 @@
 
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
+## [0.8.4] — Journaux INFRA-01 — 2026-08-29
+
+### Ajouté
+
+- `logs.health_check` et `logs.investigate` acceptent la source `infra-01`
+  transmise de façon bornée par Agent.
+- L’analyse déterministe reconnaît les arrêts, démarrages, demandes d’arrêt et
+  refus de connexion afin de corréler une indisponibilité Agent avec ses effets.
+
 ## [0.8.3] — JSON d’analyse fiable — 2026-08-27
 
 ### Corrigé

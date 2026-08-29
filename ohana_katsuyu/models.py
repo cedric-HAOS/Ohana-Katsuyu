@@ -198,7 +198,7 @@ class InfraBackupResult(ProtocolModel):
     logical_io_written_bytes: int = Field(ge=0)
 
 
-LogSourceId = Literal["ha-01", "linky-01", "zwave-01"]
+LogSourceId = Literal["infra-01", "ha-01", "linky-01", "zwave-01"]
 
 
 class LogBaseline(ProtocolModel):
@@ -208,7 +208,7 @@ class LogBaseline(ProtocolModel):
 
 
 class LogsHealthCheckParameters(ProtocolModel):
-    sources: list[LogSourceId] = Field(min_length=1, max_length=3)
+    sources: list[LogSourceId] = Field(min_length=1, max_length=4)
     window_started_at: datetime
     window_ended_at: datetime
     max_bytes_per_source: int = Field(ge=1024, le=4 * 1024 * 1024)
@@ -292,7 +292,7 @@ class LogSourceHealth(ProtocolModel):
 
 
 class LogCorrelation(ProtocolModel):
-    sources: list[LogSourceId] = Field(min_length=2, max_length=3)
+    sources: list[LogSourceId] = Field(min_length=2, max_length=4)
     occurred_at: datetime
     summary: str = Field(min_length=1, max_length=500)
 
@@ -302,7 +302,7 @@ class LogsHealthCheckResult(ProtocolModel):
     analyzed_at: datetime
     window_started_at: datetime
     window_ended_at: datetime
-    sources: list[LogSourceHealth] = Field(min_length=1, max_length=3)
+    sources: list[LogSourceHealth] = Field(min_length=1, max_length=4)
     new_anomaly_count: int = Field(ge=0)
     worsening_anomaly_count: int = Field(ge=0)
     disappeared_anomalies: list[LogBaseline] = Field(
