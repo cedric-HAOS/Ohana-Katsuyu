@@ -25,7 +25,7 @@ def test_tray_has_four_distinct_clockwise_job_frames() -> None:
     assert variants["connected"][0].tobytes() != variants["stopped"][0].tobytes()
 
 
-def test_connected_tooltip_is_explicit() -> None:
+def test_connected_tooltip_only_shows_useful_idle_information() -> None:
     now = datetime.now(UTC).isoformat()
     status = LocalStatus(
         state="connected",
@@ -35,7 +35,23 @@ def test_connected_tooltip_is_explicit() -> None:
     )
 
     assert effective_state(status) == "connected"
-    assert "· connecté ·" in tooltip(status)
+    assert tooltip(status) == f"Katsuyu {status.version} · à jour"
+
+
+def test_running_tooltip_names_the_active_job() -> None:
+    now = datetime.now(UTC).isoformat()
+    status = LocalStatus(
+        state="running",
+        updated_at=now,
+        last_connection_at=now,
+        current_job_type="backup.infra",
+        update_state="current",
+    )
+
+    assert effective_state(status) == "running"
+    assert tooltip(status) == (
+        f"Katsuyu {status.version} · à jour · sauvegarde INFRA-01 en cours"
+    )
 
 
 def test_stale_tooltip_does_not_claim_a_current_connection() -> None:
@@ -48,4 +64,4 @@ def test_stale_tooltip_does_not_claim_a_current_connection() -> None:
     )
 
     assert effective_state(status) == "stopped"
-    assert "· état périmé ·" in tooltip(status)
+    assert tooltip(status) == f"Katsuyu {status.version} · à jour · état inconnu"

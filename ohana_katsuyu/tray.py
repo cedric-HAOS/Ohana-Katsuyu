@@ -18,6 +18,17 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 from ohana_katsuyu.icon_data import OFFICIAL_OHANA_ICON_BASE64
 from ohana_katsuyu.status import LocalStatus, StatusStore
 
+JOB_LABELS = {
+    "system.health": "contrôle système",
+    "backup.compress": "compression de sauvegarde",
+    "backup.encrypt": "chiffrement de sauvegarde",
+    "backup.verify": "vérification de sauvegarde",
+    "backup.infra": "sauvegarde INFRA-01",
+    "logs.health_check": "contrôle des journaux",
+    "logs.investigate": "analyse des journaux",
+    "ai.inference": "diagnostic IA",
+}
+
 
 def official_icon() -> Image.Image:
     return (
@@ -69,30 +80,32 @@ def effective_state(status: LocalStatus) -> str:
 
 
 def tooltip(status: LocalStatus) -> str:
-    connection = status.last_connection_at or "jamais"
-    job = status.current_job_type or "aucun"
     state = effective_state(status)
-    if state == "stopped" and status.state in {"connected", "running", "error"}:
-        state_label = "état périmé"
-    else:
-        state_label = {
-            "connected": "connecté",
-            "running": "job en cours",
-            "error": "Agent inaccessible",
-            "stopped": "arrêté",
-        }[state]
     if status.update_state == "available" and status.latest_version:
-        update = f"mise à jour {status.latest_version} disponible"
+        update = f"version {status.latest_version} disponible"
     elif status.update_state == "current":
         update = "à jour"
     elif status.update_state == "unavailable":
         update = "mise à jour non vérifiée"
     else:
         update = "version non vérifiée"
-    return (
-        f"Katsuyu {status.version} · {update} · {state_label} · "
-        f"connexion {connection} · job {job}"
-    )[:127]
+
+    labels = [f"Katsuyu {status.version}", update]
+    if state == "running":
+        job = JOB_LABELS.get(
+            status.current_job_type or "",
+            (status.current_job_type or "job").replace(".", " "),
+        )
+        labels.append(f"{job} en cours")
+    elif state == "error":
+        labels.append("Agent inaccessible")
+    elif state == "stopped":
+        labels.append(
+            "état inconnu"
+            if status.state in {"connected", "running", "error"}
+            else "arrêté"
+        )
+    return " · ".join(labels)[:127]
 
 
 def open_update(status: LocalStatus) -> None:

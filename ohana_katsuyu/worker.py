@@ -377,14 +377,7 @@ class KatsuyuWorker:
         if job is None:
             self._publish_connected_status()
             return False
-        if self.status_store is not None:
-            self.status_store.write(
-                state="running",
-                last_connection_at=datetime.now(UTC).isoformat(),
-                current_job_id=str(job.job_id),
-                current_job_type=job.type,
-                error=None,
-            )
+        self._publish_running_status(job)
         handler = self.handlers.get(job.type)
         if handler is None:
             raise RuntimeError(f"Agent leased unsupported job type {job.type}")
@@ -510,6 +503,17 @@ class KatsuyuWorker:
                     context.cancelled.set()
                     self._settle_cancelled_future(future)
                     return None
+                self._publish_running_status(job)
+
+    def _publish_running_status(self, job: JobDocument) -> None:
+        if self.status_store is not None:
+            self.status_store.write(
+                state="running",
+                last_connection_at=datetime.now(UTC).isoformat(),
+                current_job_id=str(job.job_id),
+                current_job_type=job.type,
+                error=None,
+            )
 
     @staticmethod
     def _settle_cancelled_future(future: Future[dict[str, Any]]) -> None:

@@ -339,7 +339,17 @@ def test_agent_client_exposes_backup_source_error_detail_in_french(
         thread.join(timeout=2)
 
 
-def test_worker_stops_after_agent_cancellation() -> None:
+def test_worker_keeps_running_status_fresh_until_agent_cancellation(
+    tmp_path: Path,
+) -> None:
+    published = []
+
+    class RecordingStatusStore(StatusStore):
+        def write(self, *, state: str, **changes: object):
+            status = super().write(state=state, **changes)
+            published.append(status)
+            return status
+
     class SlowHandler:
         def execute(
             self, _parameters: dict[str, Any], context: HandlerContext | None = None
@@ -353,16 +363,28 @@ def test_worker_stops_after_agent_cancellation() -> None:
         def heartbeat(self, job_id: str, payload: dict[str, Any]) -> JobDocument:
             super().heartbeat(job_id, payload)
             assert self.job is not None
+            if len(self.heartbeats) == 1:
+                return self.job
             return self.job.model_copy(update={"status": JobStatus.CANCELLED})
 
     client = CancellingClient(job_document())
+    status_store = RecordingStatusStore(tmp_path / "status.json")
     worker = KatsuyuWorker(
         client=cast(AgentClient, client),
         worker_id="katsuyu-bubule",
         handlers={"system.health": SlowHandler()},
         heartbeat_seconds=0.01,
+        status_store=status_store,
     )
 
     assert worker.run_once() is True
-    assert client.heartbeats
+    assert len(client.heartbeats) == 2
     assert client.completions == []
+    running = [status for status in published if status.state == "running"]
+    assert len(running) == 2
+    assert running[1].updated_at >= running[0].updated_at
+    assert running[1].current_job_type == "system.health"
+    status = status_store.read()
+    assert status.state == "connected"
+    assert status.current_job_id is None
+    assert status.current_job_type is None

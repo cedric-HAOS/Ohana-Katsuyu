@@ -14,7 +14,7 @@ def test_package_is_windows_specific_and_has_bounded_runtime_dependencies() -> N
     ]
 
     assert project["name"] == "ohana-katsuyu"
-    assert project["version"] == "0.8.4"
+    assert project["version"] == "0.8.5"
     assert __version__ == project["version"]
     assert project["dependencies"] == [
         "Pillow>=11,<13",
