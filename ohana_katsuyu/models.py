@@ -68,6 +68,7 @@ class JobClaim(ProtocolModel):
 class JobClaimResult(ProtocolModel):
     protocol_version: Literal[1] = 1
     job: JobDocument | None = None
+    shutdown_requested: bool = False
 
 
 class JobHeartbeat(ProtocolModel):

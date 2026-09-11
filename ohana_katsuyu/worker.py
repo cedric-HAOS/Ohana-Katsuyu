@@ -105,7 +105,18 @@ class AgentClient:
         )
 
     def claim(self, payload: dict[str, Any]) -> JobClaimResult:
-        return JobClaimResult.model_validate(self._post("/v1/jobs/claim", payload))
+        try:
+            response = self._post("/v1/jobs/next", payload)
+        except RuntimeError as error:
+            if (
+                not isinstance(error.__cause__, HTTPError)
+                or error.__cause__.code != 404
+            ):
+                raise
+            # During a staggered update, continue legacy jobs without trusting
+            # an early shutdown instruction. Only /next may grant idle shutdown.
+            response = self._post("/v1/jobs/claim", payload)
+        return JobClaimResult.model_validate(response)
 
     def heartbeat(self, job_id: str, payload: dict[str, Any]) -> JobDocument:
         path = f"/v1/jobs/{quote(job_id, safe='')}/heartbeat"
@@ -373,9 +384,12 @@ class KatsuyuWorker:
             worker_id=self.worker_id,
             supported_types=sorted(self.handlers),
         )
-        job = self.client.claim(claim.model_dump(mode="json")).job
+        next_work = self.client.claim(claim.model_dump(mode="json"))
+        job = next_work.job
         if job is None:
             self._publish_connected_status()
+            if next_work.shutdown_requested:
+                self._request_shutdown()
             return False
         self._publish_running_status(job)
         handler = self.handlers.get(job.type)
@@ -448,8 +462,8 @@ class KatsuyuWorker:
             return True
         self.client.complete(str(job.job_id), completion.model_dump(mode="json"))
         self._publish_connected_status()
-        if job.shutdown_after_completion:
-            self._request_shutdown()
+        # Ask Agent for the next job/idle decision on the following iteration.
+        # A flag received before execution cannot account for new follow-up jobs.
         return True
 
     def _request_shutdown(self) -> None:

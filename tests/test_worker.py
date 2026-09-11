@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Thread
 from time import sleep
 from typing import Any, cast
+from urllib.error import HTTPError
 from uuid import uuid4
 
 import pytest
@@ -157,6 +158,30 @@ class SuccessHandler:
         return {"status": "OK"}
 
 
+@pytest.mark.parametrize("status", [404, 401])
+def test_polling_legacy_fallback_is_only_used_for_missing_endpoint(monkeypatch, status):
+    calls = []
+
+    def post(_self, path, _payload):
+        calls.append(path)
+        if path == "/v1/jobs/next":
+            raise RuntimeError("endpoint response") from HTTPError(
+                path, status, "test", {}, None
+            )
+        return {"job": None}
+
+    monkeypatch.setattr(AgentClient, "_post", post)
+    client = AgentClient("http://localhost", "test-only")
+    if status == 404:
+        result = client.claim({})
+        assert not result.shutdown_requested
+        assert calls == ["/v1/jobs/next", "/v1/jobs/claim"]
+    else:
+        with pytest.raises(RuntimeError):
+            client.claim({})
+        assert calls == ["/v1/jobs/next"]
+
+
 def test_worker_registers_and_claims_only_its_allowlist() -> None:
     client = FakeClient(job_document())
     worker = KatsuyuWorker(
@@ -174,7 +199,7 @@ def test_worker_registers_and_claims_only_its_allowlist() -> None:
     assert client.completions[-1][1]["status"] == "SUCCEEDED"
 
 
-def test_worker_requests_shutdown_after_final_ohana_job() -> None:
+def test_worker_ignores_shutdown_granted_before_completion() -> None:
     calls: list[str] = []
     client = FakeClient(
         job_document().model_copy(update={"shutdown_after_completion": True})
@@ -189,6 +214,24 @@ def test_worker_requests_shutdown_after_final_ohana_job() -> None:
     assert worker.run_once() is True
 
     assert client.completions[-1][1]["status"] == "SUCCEEDED"
+    assert calls == []
+
+
+def test_worker_shuts_down_only_after_agent_settles_the_queue() -> None:
+    calls: list[str] = []
+
+    class SettledClient(FakeClient):
+        def claim(self, payload: dict[str, Any]) -> JobClaimResult:
+            return JobClaimResult(shutdown_requested=True)
+
+    worker = KatsuyuWorker(
+        client=cast(AgentClient, SettledClient(None)),
+        worker_id="katsuyu-bubule",
+        handlers={"system.health": SuccessHandler()},
+        shutdown_requester=lambda: calls.append("shutdown"),
+    )
+    assert worker.run_once() is False
+    assert worker.shutdown_requested
     assert calls == ["shutdown"]
 
 

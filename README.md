@@ -186,3 +186,15 @@ vérifie son SHA-256 figé, construit les trois exécutables autonomes puis
 embarque le worker, l’icône et `age.exe` dans un unique `KatsuyuSetup.exe`.
 Il ajoute les métadonnées Windows de version et génère `dist\SHA256SUMS` pour
 le setup final.
+
+## Fin du cycle de journaux (0.8.6)
+
+Mettre Agent à jour en 1.26.16 avant Katsuyu. Le worker transmet les journaux,
+puis prend les diagnostics complémentaires décidés par Tsunade. L’arrêt n’est
+autorisé que par un polling à vide après traitement des résultats, avec la
+politique d’arrêt activée et un réveil attribué à Ohana. Un démarrage manuel
+ne déclenche pas cet arrêt. Les délais IA restent bornés à 900 secondes.
+
+Avec un ancien Agent, seul un HTTP 404 provoque le retour au polling historique.
+Les tâches restent exécutables mais l’ancien indicateur d’arrêt est ignoré.
+Aucune nouvelle configuration YAML n’est nécessaire.

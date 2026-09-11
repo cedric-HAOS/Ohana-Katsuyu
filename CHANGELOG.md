@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## [0.8.6] — 2026-09-11 — Arrêt après le cycle complet
+
+- Katsuyu utilise `/v1/jobs/next` et attend une autorisation d’arrêt explicite
+  après le traitement des résultats et des éventuels diagnostics complémentaires.
+- L’ancien indicateur reçu avant exécution ne déclenche plus l’arrêt. Avec un
+  ancien Agent, le polling historique reste utilisable, sans arrêt automatique.
+
 Toutes les évolutions importantes d'Ohana-Katsuyu sont documentées ici.
 
 ## [0.8.4] — Journaux INFRA-01 — 2026-08-29
