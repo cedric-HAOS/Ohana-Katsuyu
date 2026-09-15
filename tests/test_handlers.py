@@ -30,6 +30,43 @@ from ohana_katsuyu.handlers import (
 )
 
 
+def test_mqtt_information_is_not_an_anomaly_in_health_or_targeted_collection():
+    content = "\n".join(
+        [
+            "2026-09-15T05:00:00+02:00 INFO scheduled task completed mqtt.roundtrip OK",
+            "2026-09-15T05:00:01+02:00 INFO teleinfo2mqtt frame received",
+        ]
+    )
+    provider = lambda *_args: {  # noqa: E731
+        "source": "infra-01",
+        "transport": "inline",
+        "content": content,
+        "truncated": False,
+    }
+    common = {
+        "window_started_at": "2026-09-15T04:00:00+02:00",
+        "window_ended_at": "2026-09-15T06:00:00+02:00",
+    }
+    health = LogsHealthCheckHandler(provider).execute(
+        {**common, "sources": ["infra-01"], "max_bytes_per_source": 4096},
+        _log_context(),
+    )
+    assert health["status"] == "OK"
+    result = LogsInvestigateHandler(provider).execute(
+        {
+            **common,
+            "source": "infra-01",
+            "pattern": "mqtt",
+            "max_bytes": 4096,
+            "incident_id": "11111111-1111-4111-8111-111111111111",
+        },
+        _log_context(),
+    )
+    assert result["matched_lines"] == 2
+    assert result["findings"] == []
+    assert result["status"] == "OK"
+
+
 class FakeProbe:
     def collect(self) -> SystemMetrics:
         return SystemMetrics(

@@ -12,6 +12,29 @@ from ohana_katsuyu import setup
 from ohana_katsuyu.ai_install import AiInstallation
 
 
+@pytest.mark.parametrize("paired", [True, False])
+def test_update_existing_requires_paired_installation(tmp_path, monkeypatch, paired):
+    monkeypatch.setattr("sys.argv", ["KatsuyuSetup", "--update-existing"])
+    calls = []
+    monkeypatch.setattr(setup, "require_administrator", lambda: calls.append("admin"))
+    certificate = tmp_path / "ca.pem"
+    certificate.write_text("public")
+    existing = setup.ExistingInstallation(
+        "https://agent:8766", "worker", "secret", certificate
+    )
+    monkeypatch.setattr(
+        setup, "read_existing_installation", lambda: existing if paired else None
+    )
+    monkeypatch.setattr(setup, "install", lambda address: calls.append(address))
+    if paired:
+        setup.main()
+        assert calls == ["admin", "https://agent:8766"]
+    else:
+        with pytest.raises(SystemExit):
+            setup.main()
+        assert calls == ["admin"]
+
+
 def test_download_progress_is_clear_and_bounded() -> None:
     assert setup.format_download_progress("model.gguf", 1024**3, 2 * 1024**3) == (
         "model.gguf : 50.0 % (1.00/2.00 Gio)"
@@ -214,7 +237,7 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
 
     assert stopped == [True]
     assert registrations[0][0] == "existing-token"
-    assert registrations[0][1]["worker_version"] == "0.8.6"
+    assert registrations[0][1]["worker_version"] == "0.8.7"
     assert registrations[0][1]["worker_id"] == "katsuyu-bubule"
     assert registrations[0][1]["wake_on_lan_mac_address"] == "AA:BB:CC:DD:EE:FF"
     assert registrations[0][2] == "katsuyu-Bubule"

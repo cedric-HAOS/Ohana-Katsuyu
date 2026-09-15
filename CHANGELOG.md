@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## [0.8.7] — 2026-09-15 — Diagnostics et journaux fiables
+
+- Une réponse IA ne respectant pas le schéma est régénérée une seule fois avec
+  les mêmes preuves et les contraintes invalides, sans tronquer les conclusions.
+- Les termes MQTT, série ou frame dans un message normal ne suffisent plus à
+  créer une anomalie. Une collecte ciblée distingue correspondance et anomalie.
+- L’installeur accepte `--update-existing` pour une installation déjà appairée,
+  avec les droits administrateur habituels et conservation de son identité.
+
 ## [0.8.6] — 2026-09-11 — Arrêt après le cycle complet
 
 - Katsuyu utilise `/v1/jobs/next` et attend une autorisation d’arrêt explicite

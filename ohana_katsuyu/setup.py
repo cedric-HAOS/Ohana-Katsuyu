@@ -642,8 +642,24 @@ class InstallerWindow:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ohana Katsuyu Setup")
-    parser.add_argument("--uninstall", action="store_true")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--uninstall", action="store_true")
+    actions.add_argument("--update-existing", action="store_true")
     arguments = parser.parse_args()
+    if arguments.update_existing:
+        require_administrator()
+        existing = read_existing_installation()
+        if (
+            existing is None
+            or not existing.base_url.lower().startswith("https://")
+            or existing.ca_file is None
+            or not existing.ca_file.is_file()
+        ):
+            raise SystemExit(
+                "Aucune installation appairée disponible pour la mise à jour."
+            )
+        install(existing.base_url)
+        return
     if arguments.uninstall:
         try:
             detail = uninstall()

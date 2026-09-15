@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from ohana_katsuyu.handlers import HandlerContext
 from ohana_katsuyu.models import AiInferenceParameters, AiInferenceResult
 
@@ -28,6 +30,10 @@ the answer concise. Every explanation of a cause must stay in hypotheses and
 must include supporting and contradicting evidence plus calibrated confidence.
 Never present a hypothesis as a confirmed fact. Never execute or authorize an
 action; recommended investigations are proposals for Tsunade to decide.
+Use a short symbolic finding code such as NETWORK_ERROR (uppercase letters,
+digits, underscore, dot or hyphen only), never an EVIDENCE header. Each finding's
+evidence must be a concise reference of at most 500 characters, not a copied
+fragment. Respect all bounded field lengths and array sizes.
 Write every user-facing field in French, including interpretations, summaries,
 evidence, hypotheses, possible causes, missing context and investigations."""
 
@@ -207,16 +213,7 @@ class AiInferenceHandler:
         try:
             self._wait_until_ready(base_url, process, context)
             context.report(20, "ai.inference", "Analyse locale en cours")
-            generated = self._stream_diagnostic(base_url, request, context)
-            result = AiInferenceResult.model_validate(
-                {
-                    **generated["document"],
-                    "generated_at": datetime.now(UTC),
-                    "model_id": self.model_id,
-                    "model_sha256": self.model_sha256,
-                    "metrics": generated["metrics"],
-                }
-            )
+            result = self._validated_diagnostic(base_url, request, context)
             context.report(100, "ai.complete")
             return result.model_dump(mode="json")
         finally:
@@ -226,6 +223,57 @@ class AiInferenceHandler:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+
+    def _validated_diagnostic(
+        self, base_url: str, request: AiInferenceParameters, context: HandlerContext
+    ) -> AiInferenceResult:
+        """Regenerate once on a schema error; never silently alter the diagnosis."""
+        metrics = None
+        repair_instruction = ""
+        for attempt in range(2):
+            generated = self._stream_diagnostic(
+                base_url, request, context, repair_instruction=repair_instruction
+            )
+            current = generated["metrics"]
+            if metrics is None:
+                metrics = dict(current)
+            else:
+                for key in ("prompt_tokens", "completion_tokens", "duration_seconds"):
+                    metrics[key] += current[key]
+                metrics["tokens_per_second"] = (
+                    metrics["completion_tokens"] / metrics["duration_seconds"]
+                    if metrics["duration_seconds"]
+                    else 0
+                )
+            try:
+                return AiInferenceResult.model_validate(
+                    {
+                        **generated["document"],
+                        "generated_at": datetime.now(UTC),
+                        "model_id": self.model_id,
+                        "model_sha256": self.model_sha256,
+                        "metrics": metrics,
+                    }
+                )
+            except ValidationError as error:
+                issues = "; ".join(
+                    f"{'.'.join(map(str, item['loc']))}: {item['type']}"
+                    for item in error.errors(include_input=False, include_url=False)
+                )[:1000]
+                if attempt:
+                    raise RuntimeError(
+                        "Local AI response still violates the diagnostic schema "
+                        f"after one regeneration: {issues}"
+                    ) from None
+                context.report(85, "ai.inference", "Correction du format de réponse")
+                repair_instruction = (
+                    "\nRegenerate the diagnosis from the same "
+                    "evidence. The previous response failed validation: "
+                    + issues
+                    + ". Keep findings.code symbolic and findings.evidence under "
+                    "500 characters. Do not copy evidence fragments."
+                )
+        raise AssertionError("unreachable")
 
     def _verify_payload(self, context: HandlerContext) -> None:
         if not self.runtime.is_file():
@@ -273,12 +321,16 @@ class AiInferenceHandler:
         base_url: str,
         request: AiInferenceParameters,
         context: HandlerContext,
+        *,
+        repair_instruction: str = "",
     ) -> dict[str, Any]:
         evidence = "\n\n".join(
             f"EVIDENCE source={item.source!r}:\n{item.content}"
             for item in request.evidence
         )
-        user_content = f"{evidence}\n\nQUESTION:\n{request.question}"
+        user_content = (
+            f"{evidence}\n\nQUESTION:\n{request.question}\n{repair_instruction}"
+        )
         max_tokens = self._completion_token_budget(
             f"{SYSTEM_PROMPT}\n{user_content}", request.max_output_tokens
         )

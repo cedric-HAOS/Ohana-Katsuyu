@@ -21,6 +21,106 @@ from ohana_katsuyu.models import AiInferenceParameters, AiInferenceResult
 MODEL_SHA256 = "fe08ca2158cd7438211ec6a4e5256d31bc980f016e3f5b635fe91fe6848d461c"
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {
+            "code": "EVIDENCE source='logs.analysis'",
+            "evidence": "bounded",
+            "confidence": 0.8,
+        },
+        {"code": "NETWORK_ERROR", "evidence": "x" * 501, "confidence": 0.8},
+    ],
+)
+def test_invalid_finding_is_regenerated_once_without_changing_evidence(
+    tmp_path, monkeypatch, invalid
+):
+    calls = []
+    valid = {"code": "NETWORK_ERROR", "evidence": "logs.analysis", "confidence": 0.8}
+
+    def generate(self, base, request, context, *, repair_instruction=""):
+        calls.append((request.model_dump(), repair_instruction))
+        return {
+            "document": {
+                "verdict": "KO",
+                "summary": "Erreur observée",
+                "findings": [invalid if len(calls) == 1 else valid],
+            },
+            "metrics": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "ttft_ms": 1,
+                "tokens_per_second": 5,
+                "duration_seconds": 1,
+            },
+        }
+
+    monkeypatch.setattr(AiInferenceHandler, "_stream_diagnostic", generate)
+    handler = AiInferenceHandler(
+        runtime=tmp_path / "runtime",
+        model=tmp_path / "model",
+        model_id="test",
+        model_sha256=MODEL_SHA256,
+    )
+    result = handler._validated_diagnostic(
+        "http://localhost",
+        AiInferenceParameters.model_validate(parameters()),
+        HandlerContext(),
+    )
+    assert result.verdict == "KO"
+    assert result.findings[0].evidence == "logs.analysis"
+    assert len(calls) == 2
+    assert calls[0][0] == calls[1][0]
+    assert "Regenerate" in calls[1][1]
+    assert result.metrics.prompt_tokens == 20
+
+
+def test_invalid_regeneration_stops_without_exposing_generated_content(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def generate(*args, **kwargs):
+        calls.append(1)
+        return {
+            "document": {
+                "verdict": "KO",
+                "summary": "Erreur",
+                "findings": [
+                    {
+                        "code": "private user data",
+                        "evidence": "secret",
+                        "confidence": 0.8,
+                    }
+                ],
+            },
+            "metrics": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "ttft_ms": 1,
+                "tokens_per_second": 5,
+                "duration_seconds": 1,
+            },
+        }
+
+    monkeypatch.setattr(AiInferenceHandler, "_stream_diagnostic", generate)
+    handler = AiInferenceHandler(
+        runtime=tmp_path / "runtime",
+        model=tmp_path / "model",
+        model_id="test",
+        model_sha256=MODEL_SHA256,
+    )
+    with pytest.raises(RuntimeError, match="after one regeneration") as failure:
+        handler._validated_diagnostic(
+            "http://localhost",
+            AiInferenceParameters.model_validate(parameters()),
+            HandlerContext(),
+        )
+    assert len(calls) == 2
+    assert "private" not in str(failure.value)
+    assert "secret" not in str(failure.value)
+
+
 def parameters() -> dict[str, object]:
     return {
         "task": "technical.diagnosis",

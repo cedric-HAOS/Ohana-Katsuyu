@@ -156,7 +156,7 @@ _ANOMALY = re.compile(
     r"\b(error|exception|traceback|timeout|timed out|failed|failure|"
     r"disconnect(?:ed)?|reconnect(?:ed|ing)?|restart(?:ed|ing)?|unavailable|"
     r"connection refused|econnrefused|shutdown requested|stopping|stopped|"
-    r"starting|started|dead|serial|frame|interview|routing|mqtt|checksum invalid|"
+    r"starting|started|dead|checksum invalid|"
     r"transmission failed)\b",
     re.IGNORECASE,
 )
@@ -619,6 +619,8 @@ class LogsInvestigateHandler:
         for line in eligible[:200_000]:
             if needle in line.casefold():
                 matched_lines += 1
+                if not _ANOMALY.search(line):
+                    continue
                 signature = _signature(line)
                 grouped[signature] += 1
                 samples.setdefault(signature, line)
@@ -644,7 +646,7 @@ class LogsInvestigateHandler:
                 )
             )
         result = LogsInvestigateResult(
-            status="KO" if matched_lines else "OK",
+            status="KO" if findings else "OK",
             analyzed_at=datetime.now(UTC),
             source=request.source,
             pattern=request.pattern,
