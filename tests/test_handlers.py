@@ -204,6 +204,73 @@ def test_logs_health_check_reads_infra_journal_and_detects_service_lifecycle() -
     }
 
 
+@pytest.mark.parametrize("targeted", [False, True])
+def test_camera_session_paths_are_removed_before_grouping_and_references(targeted):
+    secrets = ["session.private*ABC!", "another.private*XYZ!"]
+    content = "\n".join(
+        f"2026-08-24T09:00:00Z ERROR connection failed /stok={secret}/ds sensor.camera"
+        for secret in secrets
+    )
+
+    def provider(*_args):
+        return {
+            "schema_version": 1,
+            "source": "ha-01",
+            "transport": "inline",
+            "content": content,
+            "truncated": False,
+        }
+
+    parameters = {
+        "window_started_at": "2026-08-24T08:00:00Z",
+        "window_ended_at": "2026-08-24T10:00:00Z",
+    }
+    if targeted:
+        result = LogsInvestigateHandler(provider).execute(
+            {
+                **parameters,
+                "source": "ha-01",
+                "pattern": "failed",
+                "max_bytes": 4096,
+                "incident_id": "11111111-1111-4111-8111-111111111111",
+            },
+            _log_context(),
+        )
+        findings = result["findings"]
+    else:
+        result = LogsHealthCheckHandler(provider).execute(
+            {
+                **parameters,
+                "sources": ["ha-01"],
+                "max_bytes_per_source": 4096,
+                "baseline": [
+                    {
+                        "source": "ha-01",
+                        "signature": _signature(content.splitlines()[0]).replace(
+                            "[redacted]", secret.lower()
+                        ),
+                        "occurrences": 1,
+                    }
+                    for secret in secrets
+                ],
+                "incident_id": None,
+            },
+            _log_context(),
+        )
+        findings = result["sources"][0]["findings"]
+    encoded = json.dumps(result)
+    assert all(secret not in encoded for secret in secrets)
+    assert "session.private" not in encoded
+    assert "another.private" not in encoded
+    assert len(findings) == 1
+    assert findings[0]["occurrences"] == 2
+    assert "sensor.camera" in findings[0]["references"]
+    assert "/stok=[redacted]/ds" in findings[0]["signature"]
+    if not targeted:
+        assert findings[0]["trend"] == "stable"
+        assert findings[0]["reference_occurrences"] == 2
+
+
 def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
     content = "\n".join(
         [

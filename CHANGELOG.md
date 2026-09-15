@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## Non publié
+
+- Les paramètres de session caméra dans les chemins `/stok=…/` sont masqués
+  avant regroupement des journaux et extraction des références. Les anciennes
+  signatures de référence sont également masquées et regroupées pour conserver
+  la comparaison des occurrences sans signaler une fausse nouveauté.
+
 ## [0.8.7] — 2026-09-15 — Diagnostics et journaux fiables
 
 - Une réponse IA ne respectant pas le schéma est régénérée une seule fois avec

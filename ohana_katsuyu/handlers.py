@@ -166,6 +166,12 @@ _VARIABLE = re.compile(
     re.IGNORECASE,
 )
 _ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b", re.IGNORECASE)
+_SESSION_PATH = re.compile(r"(/stok=)[^/\s\"'<>]+", re.IGNORECASE)
+
+
+def _safe_log_text(line: str) -> str:
+    """Remove camera session credentials before grouping or extracting references."""
+    return _SESSION_PATH.sub(r"\1[redacted]", line)
 
 
 def _parse_log_timestamp(line: str) -> datetime | None:
@@ -220,7 +226,7 @@ def _category(source: str, line: str) -> str:
 
 
 def _signature(line: str) -> str:
-    normalized = _TIMESTAMP.sub("<timestamp>", line.lower())
+    normalized = _TIMESTAMP.sub("<timestamp>", _safe_log_text(line).lower())
     normalized = _VARIABLE.sub("<value>", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized[:160] or "unclassified log anomaly"
@@ -228,9 +234,11 @@ def _signature(line: str) -> str:
 
 def _references(line: str) -> list[str]:
     """Keep bounded Home Assistant entity IDs without exposing raw log lines."""
-    return list(dict.fromkeys(match.casefold() for match in _ENTITY_ID.findall(line)))[
-        :16
-    ]
+    return list(
+        dict.fromkeys(
+            match.casefold() for match in _ENTITY_ID.findall(_safe_log_text(line))
+        )
+    )[:16]
 
 
 def _severity(line: str) -> str:
@@ -445,10 +453,12 @@ class LogsHealthCheckHandler:
     ) -> dict[str, Any]:
         request = LogsHealthCheckParameters.model_validate(parameters)
         runtime = context or HandlerContext()
-        baseline = {
-            (entry.source, entry.signature): entry.occurrences
-            for entry in request.baseline
-        }
+        baseline: Counter[tuple[str, str]] = Counter()
+        for entry in request.baseline:
+            # Older workers grouped rotating session credentials separately.
+            baseline[(entry.source, _safe_log_text(entry.signature))] += (
+                entry.occurrences
+            )
         results: list[LogSourceHealth] = []
         for index, source in enumerate(request.sources):
             runtime.report(
