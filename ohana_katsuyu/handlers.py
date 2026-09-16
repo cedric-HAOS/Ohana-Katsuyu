@@ -174,6 +174,17 @@ def _safe_log_text(line: str) -> str:
     return _SESSION_PATH.sub(r"\1[redacted]", line)
 
 
+def _is_log_anomaly(source: str, line: str) -> bool:
+    """A plain INFO client lifecycle message alone does not establish a fault."""
+    if source == "zwave-01":
+        message = _TIMESTAMP.sub("", line, count=1).strip()
+        if re.fullmatch(
+            r"INFO\s+Z-WAVE-SERVER:\s+Client disconnected\.?", message, re.I
+        ):
+            return False
+    return bool(_ANOMALY.search(line))
+
+
 def _parse_log_timestamp(line: str) -> datetime | None:
     match = _TIMESTAMP.search(line)
     if match is None:
@@ -226,7 +237,7 @@ def _category(source: str, line: str) -> str:
 
 
 def _signature(line: str) -> str:
-    normalized = _TIMESTAMP.sub("<timestamp>", _safe_log_text(line).lower())
+    normalized = _TIMESTAMP.sub("<timestamp>", _safe_log_text(line)).lower()
     normalized = _VARIABLE.sub("<value>", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized[:160] or "unclassified log anomaly"
@@ -552,7 +563,7 @@ class LogsHealthCheckHandler:
             if occurred_at is not None and not (started_at <= occurred_at <= ended_at):
                 continue
             analyzed_lines += 1
-            if not _ANOMALY.search(line):
+            if not _is_log_anomaly(source, line):
                 continue
             signature = _signature(line)
             grouped[signature] += 1
@@ -629,7 +640,7 @@ class LogsInvestigateHandler:
         for line in eligible[:200_000]:
             if needle in line.casefold():
                 matched_lines += 1
-                if not _ANOMALY.search(line):
+                if not _is_log_anomaly(request.source, line):
                     continue
                 signature = _signature(line)
                 grouped[signature] += 1

@@ -2,6 +2,17 @@
 
 ## Non publié
 
+- Le message INFO exact de déconnexion d'un client Z-WAVE-SERVER sur ZWAVE-01
+  ne constitue plus à lui seul une anomalie ni une corrélation. Les erreurs,
+  avertissements et messages comportant un contexte d'échec restent détectés.
+  Une recherche ciblée conserve le nombre de lignes correspondantes.
+
+- Les dates ISO des journaux sont retirées avant conversion en minuscules.
+  Un changement de jour ou d'heure ne crée plus une nouvelle signature pour
+  le même message. Les dates réelles des observations restent conservées.
+
+## Non publié
+
 - Les paramètres de session caméra dans les chemins `/stok=…/` sont masqués
   avant regroupement des journaux et extraction des références. Les anciennes
   signatures de référence sont également masquées et regroupées pour conserver

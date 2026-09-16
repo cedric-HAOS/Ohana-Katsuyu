@@ -271,6 +271,94 @@ def test_camera_session_paths_are_removed_before_grouping_and_references(targete
         assert findings[0]["reference_occurrences"] == 2
 
 
+def test_journal_iso_dates_do_not_create_new_signatures_across_days():
+    previous = (
+        "2026-09-15T09:01:43.443348+02:00 infra-01 ohana-agent[123]: "
+        "2026-09-15 09:01:43 WARNING connection timed out"
+    )
+    current = (
+        "2026-09-16T10:02:44.123456+02:00 infra-01 ohana-agent[456]: "
+        "2026-09-16 10:02:44 WARNING connection timed out"
+    )
+    signature = _signature(previous)
+    assert signature == _signature(current)
+    assert signature.count("<timestamp>") == 2
+    assert "16t" not in signature
+    from datetime import UTC, datetime
+
+    result = LogsHealthCheckHandler._analyze_source(
+        "infra-01",
+        [current],
+        len(current),
+        False,
+        datetime(2026, 9, 16, tzinfo=UTC),
+        datetime(2026, 9, 17, tzinfo=UTC),
+        {("infra-01", signature): 1},
+    )
+    assert len(result.findings) == 1
+    assert result.findings[0].trend == "stable"
+    assert result.findings[0].reference_occurrences == 1
+    assert result.findings[0].last_at == datetime(
+        2026, 9, 16, 8, 2, 44, 123456, tzinfo=UTC
+    )
+
+
+@pytest.mark.parametrize(
+    "message,anomaly",
+    [
+        ("INFO Z-WAVE-SERVER: Client disconnected", False),
+        ("WARNING Z-WAVE-SERVER: Client disconnected", True),
+        ("ERROR Z-WAVE-SERVER: Client disconnected", True),
+        ("INFO Z-WAVE-SERVER: Client disconnected due to timeout", True),
+        ("INFO OTHER-SERVER: Client disconnected", True),
+        ("INFO Z-WAVE-SERVER: Node dead", True),
+    ],
+)
+def test_zwave_info_disconnect_alone_does_not_create_anomaly_or_correlation(
+    message, anomaly
+):
+    def provider(_job, _worker, _attempt, source):
+        text = message if source == "zwave-01" else "ERROR connection timed out"
+        return {
+            "schema_version": 1,
+            "source": source,
+            "transport": "inline",
+            "content": "2026-09-16T09:01:43+02:00 " + text,
+            "truncated": False,
+        }
+
+    window = {
+        "window_started_at": "2026-09-16T09:00:00+02:00",
+        "window_ended_at": "2026-09-16T09:02:00+02:00",
+    }
+    general = LogsHealthCheckHandler(provider).execute(
+        {
+            **window,
+            "sources": ["infra-01", "zwave-01"],
+            "max_bytes_per_source": 4096,
+            "baseline": [],
+        },
+        _log_context(),
+    )
+    zwave = next(s for s in general["sources"] if s["source"] == "zwave-01")
+    assert bool(zwave["findings"]) is anomaly
+    assert bool(general["correlations"]) is anomaly
+    assert general["new_anomaly_count"] == 1 + int(anomaly)
+    targeted = LogsInvestigateHandler(provider).execute(
+        {
+            **window,
+            "source": "zwave-01",
+            "pattern": "Z-WAVE" if "Z-WAVE" in message else "OTHER",
+            "max_bytes": 4096,
+            "incident_id": "11111111-1111-4111-8111-111111111111",
+        },
+        _log_context(),
+    )
+    assert targeted["matched_lines"] == 1
+    assert bool(targeted["findings"]) is anomaly
+    assert targeted["status"] == ("KO" if anomaly else "OK")
+
+
 def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
     content = "\n".join(
         [
