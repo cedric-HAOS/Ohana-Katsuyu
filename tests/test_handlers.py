@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import io
 import json
+import string
 import tarfile
 from io import StringIO
 from pathlib import Path
@@ -28,6 +29,67 @@ from ohana_katsuyu.handlers import (
     SystemMetrics,
     _signature,
 )
+
+
+@pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize("limit", ["lines", "groups"])
+@pytest.mark.parametrize("overflow", [False, True])
+def test_log_analysis_reports_its_own_truncation(
+    monkeypatch, targeted, limit, overflow
+):
+    if limit == "lines":
+        lines = ["ok"] * 200_000 + (["ERROR omitted"] if overflow else [])
+    else:
+        names = [a + b for a in string.ascii_lowercase for b in string.ascii_lowercase]
+        lines = [f"ERROR failure {name}" for name in names[: 64 + int(overflow)]]
+    handler_type = LogsInvestigateHandler if targeted else LogsHealthCheckHandler
+    handler = handler_type(lambda *_args: {})
+    monkeypatch.setattr(handler.reader, "read", lambda *_args: (lines, 1000, False))
+    parameters = {
+        "window_started_at": "2026-09-19T00:00:00+02:00",
+        "window_ended_at": "2026-09-19T02:00:00+02:00",
+    }
+    if targeted:
+        parameters.update(
+            source="zwave-01",
+            pattern="ERROR",
+            max_bytes=4 * 1024 * 1024,
+            incident_id="11111111-1111-4111-8111-111111111111",
+        )
+    else:
+        parameters["sources"] = ["zwave-01"]
+        parameters["max_bytes_per_source"] = 4 * 1024 * 1024
+        parameters["baseline"] = [
+            {"source": "zwave-01", "signature": "old error", "occurrences": 1}
+        ]
+    result = handler.execute(parameters, _log_context())
+    source = result if targeted else result["sources"][0]
+    assert source["truncated"] is overflow
+    assert len(source["findings"]) == (0 if limit == "lines" else 64)
+    if not targeted:
+        assert len(result["disappeared_anomalies"]) == (0 if overflow else 1)
+
+
+@pytest.mark.parametrize("truncated", [False, True])
+def test_disappearance_requires_a_complete_collected_source(monkeypatch, truncated):
+    handler = LogsHealthCheckHandler(lambda *_args: {})
+    monkeypatch.setattr(handler.reader, "read", lambda *_args: ([], 0, truncated))
+    result = handler.execute(
+        {
+            "sources": ["zwave-01"],
+            "max_bytes_per_source": 4096,
+            "window_started_at": "2026-09-19T00:00:00+02:00",
+            "window_ended_at": "2026-09-20T00:00:00+02:00",
+            "baseline": [
+                {"source": source, "signature": "old error", "occurrences": 1}
+                for source in ["zwave-01", "ha-01"]
+            ],
+        },
+        _log_context(),
+    )
+    assert [item["source"] for item in result["disappeared_anomalies"]] == (
+        [] if truncated else ["zwave-01"]
+    )
 
 
 def test_mqtt_information_is_not_an_anomaly_in_health_or_targeted_collection():

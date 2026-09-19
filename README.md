@@ -35,6 +35,13 @@ leurs logs et ceux de Core, puis ferme la connexion. Le volume reste limité à
 quatre Mio par cible ; les résultats persistants ne contiennent que les
 synthèses groupées, jamais les lignes de journal brutes.
 
+Les analyses sont plafonnées à 200 000 lignes et 64 groupes par source.
+`truncated=true` signale une limite d'octets, de lignes ou de groupes atteinte
+avec des données omises. Les anomalies absentes ne sont déclarées disparues
+que pour une source collectée sans troncature ; cela ne prouve pas la résolution
+d'un incident. Un résultat `OK` sans finding sur une collecte tronquée ne
+prouve pas l'absence d'anomalies dans les données omises.
+
 ## IA locale optionnelle
 
 La capacité `ai.inference` est annoncée uniquement lorsque le runtime et le

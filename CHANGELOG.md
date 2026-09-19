@@ -2,6 +2,12 @@
 
 ## Non publié
 
+- Le contrôle général des journaux signale `truncated=true` lorsque l'analyse
+  dépasse 200 000 lignes ou 64 groupes, même si la collecte n'a pas atteint sa
+  limite d'octets. Une anomalie absente n'est déclarée disparue que pour une
+  source effectivement collectée sans troncature ; un contrôle partiel ne
+  déclare plus disparues les anomalies des autres sources.
+
 - Sur ZWAVE-01, les messages INFO exacts de début de vérification des firmwares
   et de démarrage du stockage des sauvegardes ne créent plus seuls une anomalie
   ni une corrélation. Les variantes d'échec, les niveaux WARNING/ERROR et les

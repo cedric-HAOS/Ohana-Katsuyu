@@ -497,10 +497,11 @@ class LogsHealthCheckHandler:
             )
         findings = [finding for result in results for finding in result.findings]
         current_keys = {(finding.source, finding.signature) for finding in findings}
+        complete_sources = {result.source for result in results if not result.truncated}
         disappeared = [
             LogBaseline(source=source, signature=signature, occurrences=occurrences)
             for (source, signature), occurrences in baseline.items()
-            if (source, signature) not in current_keys
+            if source in complete_sources and (source, signature) not in current_keys
         ][:192]
         correlations: list[LogCorrelation] = []
         timed = [finding for finding in findings if finding.last_at is not None]
@@ -606,7 +607,7 @@ class LogsHealthCheckHandler:
             source=source,
             status="KO" if findings else "OK",
             fetched_bytes=fetched_bytes,
-            truncated=truncated,
+            truncated=truncated or len(lines) > 200_000 or len(grouped) > 64,
             analyzed_lines=analyzed_lines,
             findings=findings,
         )
