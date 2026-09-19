@@ -175,11 +175,15 @@ def _safe_log_text(line: str) -> str:
 
 
 def _is_log_anomaly(source: str, line: str) -> bool:
-    """A plain INFO client lifecycle message alone does not establish a fault."""
+    """Known plain INFO activity messages alone do not establish a fault."""
     if source == "zwave-01":
         message = _TIMESTAMP.sub("", line, count=1).strip()
         if re.fullmatch(
-            r"INFO\s+Z-WAVE-SERVER:\s+Client disconnected\.?", message, re.I
+            r"INFO\s+(?:Z-WAVE-SERVER:\s+Client disconnected|"
+            r"Z-WAVE:\s+Starting bulk firmware update check for all nodes|"
+            r"BACKUP:\s+Backup store started)\.?",
+            message,
+            re.I,
         ):
             return False
     return bool(_ANOMALY.search(line))

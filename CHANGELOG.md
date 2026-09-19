@@ -2,6 +2,12 @@
 
 ## Non publié
 
+- Sur ZWAVE-01, les messages INFO exacts de début de vérification des firmwares
+  et de démarrage du stockage des sauvegardes ne créent plus seuls une anomalie
+  ni une corrélation. Les variantes d'échec, les niveaux WARNING/ERROR et les
+  autres sources conservent leur détection ; les correspondances ciblées restent
+  comptées. Les messages de cycle des services `s6-rc` ne sont pas modifiés.
+
 - Le message INFO exact de déconnexion d'un client Z-WAVE-SERVER sur ZWAVE-01
   ne constitue plus à lui seul une anomalie ni une corrélation. Les erreurs,
   avertissements et messages comportant un contexte d'échec restent détectés.

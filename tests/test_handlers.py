@@ -312,9 +312,17 @@ def test_journal_iso_dates_do_not_create_new_signatures_across_days():
         ("INFO Z-WAVE-SERVER: Client disconnected due to timeout", True),
         ("INFO OTHER-SERVER: Client disconnected", True),
         ("INFO Z-WAVE-SERVER: Node dead", True),
+        ("INFO Z-WAVE: Starting bulk firmware update check for all nodes", False),
+        ("INFO BACKUP: Backup store started", False),
+        ("WARNING BACKUP: Backup store started", True),
+        ("ERROR Z-WAVE: Starting bulk firmware update check for all nodes", True),
+        ("INFO BACKUP: Backup store started with timeout", True),
+        ("INFO Z-WAVE: Starting bulk firmware update check for all nodes failed", True),
+        ("INFO OTHER: Backup store started", True),
+        ("INFO Z-WAVE: Starting driver", True),
     ],
 )
-def test_zwave_info_disconnect_alone_does_not_create_anomaly_or_correlation(
+def test_zwave_info_activity_alone_does_not_create_anomaly_or_correlation(
     message, anomaly
 ):
     def provider(_job, _worker, _attempt, source):
@@ -348,7 +356,7 @@ def test_zwave_info_disconnect_alone_does_not_create_anomaly_or_correlation(
         {
             **window,
             "source": "zwave-01",
-            "pattern": "Z-WAVE" if "Z-WAVE" in message else "OTHER",
+            "pattern": message.split(":", 1)[0],
             "max_bytes": 4096,
             "incident_id": "11111111-1111-4111-8111-111111111111",
         },
@@ -357,6 +365,37 @@ def test_zwave_info_disconnect_alone_does_not_create_anomaly_or_correlation(
     assert targeted["matched_lines"] == 1
     assert bool(targeted["findings"]) is anomaly
     assert targeted["status"] == ("KO" if anomaly else "OK")
+
+
+@pytest.mark.parametrize("source", ["infra-01", "ha-01"])
+@pytest.mark.parametrize(
+    "message",
+    [
+        "INFO BACKUP: Backup store started",
+        "INFO Z-WAVE: Starting bulk firmware update check for all nodes",
+    ],
+)
+def test_zwave_activity_exclusions_do_not_hide_other_source_events(source, message):
+    def provider(_job, _worker, _attempt, requested_source):
+        return {
+            "schema_version": 1,
+            "source": requested_source,
+            "transport": "inline",
+            "content": "2026-09-19T15:38:32+02:00 " + message,
+            "truncated": False,
+        }
+
+    result = LogsHealthCheckHandler(provider).execute(
+        {
+            "sources": [source],
+            "window_started_at": "2026-09-19T15:00:00+02:00",
+            "window_ended_at": "2026-09-19T16:00:00+02:00",
+            "max_bytes_per_source": 4096,
+            "baseline": [],
+        },
+        _log_context(),
+    )
+    assert len(result["sources"][0]["findings"]) == 1
 
 
 def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
