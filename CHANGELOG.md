@@ -2,6 +2,12 @@
 
 ## Non publié
 
+- Les mots de la cible d'une ligne d'accès HTTP reconnue ne déterminent plus
+  l'anomalie ni sa criticité : un GET 200 contenant `critical` dans son URL ne
+  devient plus une panne critique. Les vrais niveaux d'erreur, les messages hors
+  cible et les réponses 5xx restent détectés dans les deux collectes, y compris
+  avec une URL longue. Les correspondances ciblées restent comptées.
+
 - Les collectes générales et ciblées conservent les groupes critiques avant
   les autres lors du plafonnement à 64 groupes, même avec une seule occurrence.
   Les messages `CRITICAL` et `FATAL` sont détectés sans nécessiter un autre mot

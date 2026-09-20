@@ -167,11 +167,30 @@ _VARIABLE = re.compile(
 )
 _ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b", re.IGNORECASE)
 _SESSION_PATH = re.compile(r"(/stok=)[^/\s\"'<>]+", re.IGNORECASE)
+_HTTP_ACCESS = re.compile(
+    r'\b(?:DEBUG|INFO|WARNING|ERROR|CRITICAL):\s+\S+\s+-\s+"'
+    r"(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(?P<target>\S+)\s+"
+    r'HTTP/\d(?:\.\d)?"\s+(?P<status>[1-5]\d{2})\b',
+    re.IGNORECASE,
+)
 
 
 def _safe_log_text(line: str) -> str:
     """Remove camera session credentials before grouping or extracting references."""
     return _SESSION_PATH.sub(r"\1[redacted]", line)
+
+
+def _log_event_text(line: str) -> tuple[str, int | None]:
+    """Request targets are data, not a severity or application error message."""
+    access = _HTTP_ACCESS.search(line)
+    if access is None:
+        return line, None
+    return (
+        line[: access.start("target")]
+        + "<request-target>"
+        + line[access.end("target") :],
+        int(access["status"]),
+    )
 
 
 def _is_log_anomaly(source: str, line: str) -> bool:
@@ -186,7 +205,10 @@ def _is_log_anomaly(source: str, line: str) -> bool:
             re.I,
         ):
             return False
-    return bool(_ANOMALY.search(line))
+    event, http_status = _log_event_text(line)
+    return bool(_ANOMALY.search(event)) or (
+        http_status is not None and http_status >= 500
+    )
 
 
 def _parse_log_timestamp(line: str) -> datetime | None:
@@ -206,7 +228,7 @@ def _parse_log_timestamp(line: str) -> datetime | None:
 
 
 def _category(source: str, line: str) -> str:
-    lowered = line.lower()
+    lowered = _log_event_text(line)[0].lower()
     if source == "zwave-01" and any(
         term in lowered for term in ("node", "transmission", "interview", "routing")
     ):
@@ -257,10 +279,13 @@ def _references(line: str) -> list[str]:
 
 
 def _severity(line: str) -> str:
-    lowered = line.lower()
+    event, http_status = _log_event_text(line)
+    lowered = event.lower()
     if "critical" in lowered or "fatal" in lowered:
         return "critical"
-    if any(term in lowered for term in ("error", "exception", "failed", "dead")):
+    if (http_status is not None and http_status >= 500) or any(
+        term in lowered for term in ("error", "exception", "failed", "dead")
+    ):
         return "error"
     return "warning"
 
@@ -602,7 +627,7 @@ class LogsHealthCheckHandler:
                 continue
             signature = _signature(line)
             grouped[signature] += 1
-            samples.setdefault(signature, line.strip()[:500])
+            samples.setdefault(signature, _log_event_text(line)[0].strip()[:500])
             if occurred_at is not None:
                 times[signature].append(occurred_at)
         findings: list[LogFinding] = []
@@ -679,7 +704,7 @@ class LogsInvestigateHandler:
                     continue
                 signature = _signature(line)
                 grouped[signature] += 1
-                samples.setdefault(signature, line)
+                samples.setdefault(signature, _log_event_text(line)[0])
                 occurred_at = _parse_log_timestamp(line)
                 if occurred_at is not None:
                     times[signature].append(occurred_at)

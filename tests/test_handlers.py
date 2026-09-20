@@ -32,6 +32,70 @@ from ohana_katsuyu.handlers import (
 
 
 @pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize(
+    ("message", "expected_severity"),
+    [
+        ('INFO: 127.0.0.1:1234 - "GET /search?q=critical HTTP/1.1" 200 OK', None),
+        (
+            'INFO: 127.0.0.1:1234 - "POST /restart?error=fatal HTTP/1.1" 202 Accepted',
+            None,
+        ),
+        ('INFO: 127.0.0.1:1234 - "GET /error HTTP/1.1" 302 Found', None),
+        ('INFO: 127.0.0.1:1234 - "GET /error HTTP/1.1" 401 Unauthorized', None),
+        (
+            'INFO: 127.0.0.1:1234 - "GET /critical HTTP/1.1" 500 Internal Server Error',
+            "error",
+        ),
+        (
+            'INFO: 127.0.0.1:1234 - "GET /ready HTTP/1.1" 503 Service Unavailable',
+            "error",
+        ),
+        (
+            'INFO: 127.0.0.1:1234 - "GET /critical?value='
+            + "x" * 600
+            + ' HTTP/1.1" 503 Service Unavailable',
+            "error",
+        ),
+        ('ERROR: 127.0.0.1:1234 - "GET /critical HTTP/1.1" 200 OK', "error"),
+        ('CRITICAL: 127.0.0.1:1234 - "GET /ready HTTP/1.1" 200 OK', "critical"),
+        (
+            'INFO: 127.0.0.1:1234 - "GET /ready HTTP/1.1" 200 OK; critical failure',
+            "critical",
+        ),
+        ("WARNING failed request GET /critical", "critical"),
+    ],
+)
+def test_http_access_targets_do_not_define_anomaly_severity(
+    monkeypatch, targeted, message, expected_severity
+):
+    line = "2026-09-20T17:35:10+02:00 infra-01 ohana-vision[42]: " + message
+    handler_type = LogsInvestigateHandler if targeted else LogsHealthCheckHandler
+    handler = handler_type(lambda *_args: {})
+    monkeypatch.setattr(handler.reader, "read", lambda *_args: ([line], 1000, False))
+    parameters = {
+        "window_started_at": "2026-09-20T17:00:00+02:00",
+        "window_ended_at": "2026-09-20T18:00:00+02:00",
+    }
+    if targeted:
+        parameters.update(
+            source="infra-01",
+            pattern="HTTP" if "HTTP" in message else "request",
+            max_bytes=4096,
+            incident_id="11111111-1111-4111-8111-111111111111",
+        )
+    else:
+        parameters.update(sources=["infra-01"], max_bytes_per_source=4096)
+    result = handler.execute(parameters, _log_context())
+    source = result if targeted else result["sources"][0]
+    assert [f["severity"] for f in source["findings"]] == (
+        [] if expected_severity is None else [expected_severity]
+    )
+    assert source["truncated"] is False
+    if targeted:
+        assert result["matched_lines"] == 1
+
+
+@pytest.mark.parametrize("targeted", [False, True])
 @pytest.mark.parametrize("limit", ["lines", "groups"])
 @pytest.mark.parametrize("overflow", [False, True])
 def test_log_analysis_reports_its_own_truncation(
