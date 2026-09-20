@@ -312,7 +312,7 @@ class _DirectLogReader:
         base_url = descriptor.get("base_url")
         if isinstance(base_url, str):
             try:
-                payload = self._read_supervisor(
+                payload, truncated = self._read_supervisor(
                     base_url,
                     token,
                     descriptor.get("addon_name_patterns", []),
@@ -323,14 +323,14 @@ class _DirectLogReader:
                 return (
                     payload.decode("utf-8", errors="replace").splitlines(),
                     len(payload),
-                    len(payload) >= max_bytes,
+                    truncated,
                 )
             except (OSError, RuntimeError, ValueError, WebSocketException) as error:
                 # Keep the primary Supervisor/proxy failure visible when the
                 # compatibility URL is used as a bounded fallback.
                 supervisor_warning = (
                     "ERROR Katsuyu Supervisor log access unavailable: "
-                    f"{type(error).__name__}: {error}; using Home Assistant "
+                    f"{type(error).__name__}; using Home Assistant "
                     "core log fallback\n"
                 ).encode("utf-8", errors="replace")
             else:  # pragma: no cover - return above documents the successful branch.
@@ -345,7 +345,14 @@ class _DirectLogReader:
         ) as response:
             payload = response.read(max_bytes + 1)
         context.check()
-        truncated = len(supervisor_warning) + len(payload) > max_bytes
+        # Legacy Agent URLs request at most 10,000 lines: reaching that cap
+        # cannot demonstrate that the source is complete. A fallback also loses
+        # the requested Supervisor/add-on scope, even when its Core log is short.
+        truncated = (
+            bool(supervisor_warning)
+            or len(payload.splitlines()) >= 10_000
+            or len(supervisor_warning) + len(payload) > max_bytes
+        )
         bounded = (supervisor_warning + payload)[:max_bytes]
         return (
             bounded.decode("utf-8", errors="replace").splitlines(),
@@ -362,13 +369,16 @@ class _DirectLogReader:
         timeout: float,
         *,
         verify_tls: bool,
-    ) -> bytes:
+    ) -> tuple[bytes, bool]:
         normalized_base_url = base_url.rstrip("/")
         tls_context = None
         if normalized_base_url.startswith("https://") and not verify_tls:
             tls_context = ssl._create_unverified_context()  # noqa: SLF001
 
+        truncated = False
+
         def read_text(path: str, params: dict[str, object]) -> bytes:
+            nonlocal truncated
             query = urlencode(params)
             request = Request(
                 f"{normalized_base_url}/api/hassio/{path.lstrip('/')}?{query}",
@@ -383,12 +393,19 @@ class _DirectLogReader:
                 timeout=timeout,
                 context=tls_context,
             ) as response:
-                return response.read(max_bytes + 1)
+                payload = response.read(max_bytes + 1)
+            lines = payload.splitlines(keepends=True)
+            truncated |= len(payload) > max_bytes or len(lines) > 10_000
+            return b"".join(lines[-10_000:])
+
+        def combine(fragments):
+            payload = b"\n".join(fragments)
+            return payload[:max_bytes], truncated or len(payload) > max_bytes
 
         fragments = [
             read_text(
                 "/core/logs/latest",
-                {"lines": 10_000, "no_colors": 1},
+                {"lines": 10_001, "no_colors": 1},
             )
         ]
         patterns = (
@@ -397,7 +414,7 @@ class _DirectLogReader:
             else []
         )
         if not patterns:
-            return b"\n".join(fragments)[:max_bytes]
+            return combine(fragments)
 
         websocket_url = re.sub(r"^http", "ws", normalized_base_url)
         ssl_options = {} if verify_tls else {"cert_reqs": ssl.CERT_NONE}
@@ -447,10 +464,10 @@ class _DirectLogReader:
                     fragments.append(
                         read_text(
                             f"/addons/{quote(slug, safe='')}/logs",
-                            {"lines": 10_000, "no_colors": 1},
+                            {"lines": 10_001, "no_colors": 1},
                         )
                     )
-            return b"\n".join(fragments)[:max_bytes]
+            return combine(fragments)
         finally:
             connection.close()
 

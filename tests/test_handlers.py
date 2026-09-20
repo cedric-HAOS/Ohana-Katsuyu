@@ -578,13 +578,74 @@ def test_logs_health_check_uses_supervisor_proxy_and_discovered_addon(
     assert requested_urls == [
         (
             "http://zwave-01.ohana.lan:8123/api/hassio/"
-            "core/logs/latest?lines=10000&no_colors=1"
+            "core/logs/latest?lines=10001&no_colors=1"
         ),
         (
             "http://zwave-01.ohana.lan:8123/api/hassio/addons/"
-            "a0d7b954_zwavejs2mqtt/logs?lines=10000&no_colors=1"
+            "a0d7b954_zwavejs2mqtt/logs?lines=10001&no_colors=1"
         ),
     ]
+
+
+@pytest.mark.parametrize("line_count", [9999, 10000, 10001])
+def test_supervisor_line_cap_is_reported_even_below_byte_limit(monkeypatch, line_count):
+    content = b"INFO normal activity\n" * line_count
+
+    def response(request, **kwargs):
+        assert "lines=10001" in request.full_url
+        return io.BytesIO(content)
+
+    monkeypatch.setattr("ohana_katsuyu.handlers.urlopen", response)
+    from ohana_katsuyu.handlers import _DirectLogReader
+
+    payload, truncated = _DirectLogReader._read_supervisor(
+        "http://ha.test:8123", "private", [], 4 * 1024 * 1024, 5, verify_tls=True
+    )
+    assert len(payload.splitlines()) == min(line_count, 10000)
+    assert truncated is (line_count > 10000)
+
+
+@pytest.mark.parametrize("size", [4095, 4096, 4097])
+def test_supervisor_byte_cap_distinguishes_exact_fit(monkeypatch, size):
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen", lambda *a, **k: io.BytesIO(b"x" * size)
+    )
+    from ohana_katsuyu.handlers import _DirectLogReader
+
+    payload, truncated = _DirectLogReader._read_supervisor(
+        "http://ha.test:8123", "private", [], 4096, 5, verify_tls=True
+    )
+    assert len(payload) == min(size, 4096)
+    assert truncated is (size > 4096)
+
+
+def test_supervisor_fallback_is_incomplete_and_does_not_expose_error_secrets(
+    monkeypatch,
+):
+    from ohana_katsuyu.handlers import _DirectLogReader
+
+    def failure(*args, **kwargs):
+        raise RuntimeError("access_token=privatePassword http://user:secret@ha.test/")
+
+    monkeypatch.setattr(_DirectLogReader, "_read_supervisor", failure)
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen",
+        lambda *a, **k: io.BytesIO(b"INFO Core started"),
+    )
+    reader = _DirectLogReader(
+        lambda *a: {
+            "source": "zwave-01",
+            "base_url": "http://ha.test:8123",
+            "url": "http://ha.test:8123/api/hassio/core/logs/latest?lines=10000",
+            "access_token": "privatePassword",
+        }
+    )
+    lines, size, truncated = reader.read("zwave-01", 4096, _log_context())
+    assert truncated is True
+    assert size > 0
+    assert "core log fallback" in str(lines)
+    assert "privatePassword" not in str(lines)
+    assert "secret" not in str(lines)
 
 
 def _infra_source_tar(backup_id: str = "20260820T120000Z") -> bytes:

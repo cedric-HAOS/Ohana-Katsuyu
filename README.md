@@ -42,6 +42,12 @@ que pour une source collectée sans troncature ; cela ne prouve pas la résoluti
 d'un incident. Un résultat `OK` sans finding sur une collecte tronquée ne
 prouve pas l'absence d'anomalies dans les données omises.
 
+La collecte Supervisor demande au plus 10 001 lignes par journal pour détecter
+un dépassement du plafond de 10 000 avant la limite d'analyse. Un repli sur les
+journaux Core après échec Supervisor ne vaut pas collecte complète de l'add-on :
+il reste signalé comme incomplet. Les exceptions de ce parcours ne transmettent
+que leur type, sans leur message brut potentiellement sensible.
+
 ## IA locale optionnelle
 
 La capacité `ai.inference` est annoncée uniquement lorsque le runtime et le

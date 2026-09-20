@@ -2,6 +2,13 @@
 
 ## Non publié
 
+- Les collectes Supervisor demandent une ligne témoin au-delà du plafond de
+  10 000 lignes et distinguent un volume exactement égal au plafond d'octets
+  d'un dépassement. Le résultat signale les pertes de données.
+- Le repli sur les journaux Core après échec Supervisor reste explicitement
+  incomplet. Le message d'erreur brut n'est plus intégré aux preuves : seul
+  le type d'erreur est conservé, sans URL ni identifiant exposé par l'exception.
+
 - Le contrôle général des journaux signale `truncated=true` lorsque l'analyse
   dépasse 200 000 lignes ou 64 groupes, même si la collecte n'a pas atteint sa
   limite d'octets. Une anomalie absente n'est déclarée disparue que pour une
