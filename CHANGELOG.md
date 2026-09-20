@@ -2,6 +2,11 @@
 
 ## Non publié
 
+- Les collectes générales et ciblées conservent les groupes critiques avant
+  les autres lors du plafonnement à 64 groupes, même avec une seule occurrence.
+  Les messages `CRITICAL` et `FATAL` sont détectés sans nécessiter un autre mot
+  d'erreur. Les compteurs et le signalement de troncature restent conservés.
+
 - Les collectes Supervisor demandent une ligne témoin au-delà du plafond de
   10 000 lignes et distinguent un volume exactement égal au plafond d'octets
   d'un dépassement. Le résultat signale les pertes de données.

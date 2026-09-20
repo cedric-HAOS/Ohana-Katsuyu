@@ -153,7 +153,7 @@ _TIMESTAMP = re.compile(
     r"(?:Z|[+-]\d{2}:?\d{2})?)"
 )
 _ANOMALY = re.compile(
-    r"\b(error|exception|traceback|timeout|timed out|failed|failure|"
+    r"\b(critical|fatal|error|exception|traceback|timeout|timed out|failed|failure|"
     r"disconnect(?:ed)?|reconnect(?:ed|ing)?|restart(?:ed|ing)?|unavailable|"
     r"connection refused|econnrefused|shutdown requested|stopping|stopped|"
     r"starting|started|dead|checksum invalid|"
@@ -263,6 +263,19 @@ def _severity(line: str) -> str:
     if any(term in lowered for term in ("error", "exception", "failed", "dead")):
         return "error"
     return "warning"
+
+
+def _selected_log_groups(
+    grouped: Counter[str], samples: dict[str, str]
+) -> list[tuple[str, int]]:
+    """Keep rare critical evidence before applying the shared findings limit."""
+    return sorted(
+        grouped.items(),
+        key=lambda item: (
+            _severity(samples[item[0]]) != "critical",
+            -item[1],
+        ),
+    )[:64]
 
 
 class _DirectLogReader:
@@ -593,7 +606,7 @@ class LogsHealthCheckHandler:
             if occurred_at is not None:
                 times[signature].append(occurred_at)
         findings: list[LogFinding] = []
-        for signature, occurrences in grouped.most_common(64):
+        for signature, occurrences in _selected_log_groups(grouped, samples):
             previous = baseline.get((source, signature))
             if previous is None:
                 trend = "new"
@@ -671,7 +684,7 @@ class LogsInvestigateHandler:
                 if occurred_at is not None:
                     times[signature].append(occurred_at)
         findings: list[LogFinding] = []
-        for signature, occurrences in grouped.most_common(64):
+        for signature, occurrences in _selected_log_groups(grouped, samples):
             observed = times.get(signature, [])
             sample = samples[signature]
             findings.append(

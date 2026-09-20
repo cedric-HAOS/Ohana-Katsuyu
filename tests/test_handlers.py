@@ -70,6 +70,44 @@ def test_log_analysis_reports_its_own_truncation(
         assert len(result["disappeared_anomalies"]) == (0 if overflow else 1)
 
 
+@pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize("critical_message", ["CRITICAL unique", "FATAL unique"])
+def test_rare_critical_group_survives_findings_limit(
+    monkeypatch, targeted, critical_message
+):
+    names = [a + b for a in string.ascii_lowercase for b in string.ascii_lowercase]
+    lines = [f"ERROR unique failure {name}" for name in names[:64]] * 3
+    lines.append(critical_message)
+    handler_type = LogsInvestigateHandler if targeted else LogsHealthCheckHandler
+    handler = handler_type(lambda *_args: {})
+    monkeypatch.setattr(handler.reader, "read", lambda *_args: (lines, 1000, False))
+    parameters = {
+        "window_started_at": "2026-09-20T00:00:00+02:00",
+        "window_ended_at": "2026-09-20T02:00:00+02:00",
+    }
+    if targeted:
+        parameters.update(
+            source="infra-01",
+            pattern="unique",
+            max_bytes=4096,
+            incident_id="11111111-1111-4111-8111-111111111111",
+        )
+    else:
+        parameters.update(sources=["infra-01"], max_bytes_per_source=4096)
+    result = handler.execute(parameters, _log_context())
+    source = result if targeted else result["sources"][0]
+    assert source["truncated"] is True
+    assert len(source["findings"]) == 64
+    critical = source["findings"][0]
+    assert critical["severity"] == "critical"
+    assert critical["occurrences"] == 1
+    assert critical["first_at"] is None
+    assert critical["last_at"] is None
+    assert all(item["occurrences"] == 3 for item in source["findings"][1:])
+    if targeted:
+        assert result["matched_lines"] == 193
+
+
 @pytest.mark.parametrize("truncated", [False, True])
 def test_disappearance_requires_a_complete_collected_source(monkeypatch, truncated):
     handler = LogsHealthCheckHandler(lambda *_args: {})
