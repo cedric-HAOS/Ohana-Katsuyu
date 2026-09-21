@@ -33,6 +33,191 @@ from ohana_katsuyu.handlers import (
 
 @pytest.mark.parametrize("targeted", [False, True])
 @pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        (
+            [
+                "s6-rc: info: service example: starting",
+                "s6-rc: info: service example successfully started",
+            ],
+            0,
+        ),
+        (["s6-rc: info: service example: starting"], 1),
+        (["s6-rc: info: service example successfully started"], 1),
+        (
+            [
+                "s6-rc: info: service example successfully started",
+                "s6-rc: info: service example: starting",
+            ],
+            2,
+        ),
+        (
+            [
+                "s6-rc: info: service example: starting",
+                "s6-rc: info: service other successfully started",
+            ],
+            2,
+        ),
+        (
+            [
+                "s6-rc: info: service example: starting",
+                "s6-rc: info: service example successfully started",
+            ]
+            * 2,
+            2,
+        ),
+        (
+            [
+                "s6-rc: info: service example: starting",
+                "s6-rc: warning: service example failed",
+            ],
+            2,
+        ),
+        (
+            [
+                "s6-rc: info: service example: starting",
+                "s6-rc: info: service example successfully started; timeout",
+            ],
+            2,
+        ),
+        (
+            [
+                "s6-rc: info: service example: starting",
+                "s6-rc: info: service example successfully started",
+                "s6-rc: warning: service example failed",
+            ],
+            1,
+        ),
+    ],
+)
+def test_s6_single_completed_startup_is_not_a_fault(
+    monkeypatch, targeted, messages, expected
+):
+    handler_type = LogsInvestigateHandler if targeted else LogsHealthCheckHandler
+    handler = handler_type(lambda *_args: {})
+    monkeypatch.setattr(handler.reader, "read", lambda *_args: (messages, 1000, True))
+    parameters = {
+        "window_started_at": "2026-09-21T08:00:00+02:00",
+        "window_ended_at": "2026-09-21T10:00:00+02:00",
+    }
+    if targeted:
+        parameters.update(
+            source="zwave-01",
+            pattern="s6-rc",
+            max_bytes=4096,
+            incident_id="11111111-1111-4111-8111-111111111111",
+        )
+    else:
+        parameters.update(sources=["zwave-01"], max_bytes_per_source=4096)
+    result = handler.execute(parameters, _log_context())
+    source = result if targeted else result["sources"][0]
+    assert len(source["findings"]) == expected
+    assert source["truncated"] is True
+    assert all(
+        f["first_at"] is None and f["last_at"] is None for f in source["findings"]
+    )
+    if targeted:
+        assert result["matched_lines"] == len(messages)
+    else:
+        assert source["analyzed_lines"] == len(messages)
+
+
+@pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize(
+    ("source_id", "prefixes", "pattern", "expected", "matches"),
+    [
+        ("linky-01", ("", ""), "starting", 0, 1),
+        ("ha-01", ("", ""), "s6-rc", 0, 2),
+        ("infra-01", ("", ""), "s6-rc", 2, 2),
+        (
+            "zwave-01",
+            ("2026-09-21T08:10:00+02:00 ", "2026-09-21T08:11:00+02:00 "),
+            "s6-rc",
+            0,
+            2,
+        ),
+        (
+            "zwave-01",
+            ("2026-09-21T07:10:00+02:00 ", "2026-09-21T08:11:00+02:00 "),
+            "s6-rc",
+            1,
+            1,
+        ),
+        (
+            "zwave-01",
+            ("2026-09-21T08:12:00+02:00 ", "2026-09-21T08:11:00+02:00 "),
+            "s6-rc",
+            2,
+            2,
+        ),
+        ("zwave-01", ("", "2026-09-21T08:11:00+02:00 "), "s6-rc", 2, 2),
+        ("zwave-01", ("ERROR ", "ERROR "), "s6-rc", 2, 2),
+    ],
+)
+def test_s6_pair_respects_source_window_and_search_scope(
+    monkeypatch, targeted, source_id, prefixes, pattern, expected, matches
+):
+    lines = [
+        prefixes[0] + "s6-rc: info: service example: starting",
+        prefixes[1] + "s6-rc: info: service example successfully started",
+    ]
+    handler = (LogsInvestigateHandler if targeted else LogsHealthCheckHandler)(
+        lambda *_args: {}
+    )
+    monkeypatch.setattr(handler.reader, "read", lambda *_args: (lines, 1000, False))
+    parameters = {
+        "window_started_at": "2026-09-21T08:00:00+02:00",
+        "window_ended_at": "2026-09-21T10:00:00+02:00",
+    }
+    if targeted:
+        parameters.update(
+            source=source_id,
+            pattern=pattern,
+            max_bytes=4096,
+            incident_id="11111111-1111-4111-8111-111111111111",
+        )
+    else:
+        parameters.update(sources=[source_id], max_bytes_per_source=4096)
+    result = handler.execute(parameters, _log_context())
+    source = result if targeted else result["sources"][0]
+    assert len(source["findings"]) == expected
+    assert source["truncated"] is False
+    if targeted:
+        assert result["matched_lines"] == matches
+
+
+@pytest.mark.parametrize("targeted", [False, True])
+def test_s6_success_beyond_analysis_budget_does_not_hide_incomplete_start(
+    monkeypatch, targeted
+):
+    lines = ["s6-rc: info: service example: starting"] + ["ordinary activity"] * 199_999
+    lines.append("s6-rc: info: service example successfully started")
+    handler = (LogsInvestigateHandler if targeted else LogsHealthCheckHandler)(
+        lambda *_args: {}
+    )
+    monkeypatch.setattr(handler.reader, "read", lambda *_args: (lines, 1000, False))
+    parameters = {
+        "window_started_at": "2026-09-21T08:00:00+02:00",
+        "window_ended_at": "2026-09-21T10:00:00+02:00",
+    }
+    if targeted:
+        parameters.update(
+            source="zwave-01",
+            pattern="s6-rc",
+            max_bytes=4096,
+            incident_id="11111111-1111-4111-8111-111111111111",
+        )
+    else:
+        parameters.update(sources=["zwave-01"], max_bytes_per_source=4096)
+    result = handler.execute(parameters, _log_context())
+    source = result if targeted else result["sources"][0]
+    assert len(source["findings"]) == 1
+    assert source["truncated"] is True
+    assert source["findings"][0]["occurrences"] == 1
+
+
+@pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize(
     ("message", "expected_severity"),
     [
         ('INFO: 127.0.0.1:1234 - "GET /search?q=critical HTTP/1.1" 200 OK', None),

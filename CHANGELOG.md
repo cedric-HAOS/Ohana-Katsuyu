@@ -2,6 +2,12 @@
 
 ## Non publié
 
+- Sur les sources Supervisor HA-01, LINKY-01 et ZWAVE-01, une unique paire INFO
+  `s6-rc` de démarrage puis succès du même service n'est plus une anomalie.
+  Les répétitions, paires incomplètes, erreurs et dates incohérentes restent
+  détectées. Les lignes analysées et correspondances restent comptées ; aucune
+  date n'est inventée et les limites de collecte restent signalées.
+
 - Les mots de la cible d'une ligne d'accès HTTP reconnue ne déterminent plus
   l'anomalie ni sa criticité : un GET 200 contenant `critical` dans son URL ne
   devient plus une panne critique. Les vrais niveaux d'erreur, les messages hors

@@ -173,6 +173,46 @@ _HTTP_ACCESS = re.compile(
     r'HTTP/\d(?:\.\d)?"\s+(?P<status>[1-5]\d{2})\b',
     re.IGNORECASE,
 )
+_S6_STARTUP = re.compile(
+    r"s6-rc: info: service (?P<service>[a-zA-Z0-9_-]+)"
+    r"(?:: (?P<starting>starting)| (?P<started>successfully started))"
+)
+
+
+def _completed_s6_startup_lines(
+    source: str, lines: list[str], started_at: datetime, ended_at: datetime
+) -> set[int]:
+    """Exclude only a single, ordered INFO start/success pair per service.
+
+    Repeated starts remain evidence, including when their dates are unknown.
+    This classifies lifecycle messages; it does not establish current health.
+    """
+    if source not in {"ha-01", "linky-01", "zwave-01"}:
+        return set()
+    events: dict[str, list[tuple[int, bool, datetime | None]]] = defaultdict(list)
+    for index, line in enumerate(lines[:200_000]):
+        if "s6-rc: info: service " not in line:
+            continue
+        match = _S6_STARTUP.fullmatch(_TIMESTAMP.sub("", line, count=1).strip())
+        if match is None:
+            continue
+        occurred_at = _parse_log_timestamp(line)
+        if occurred_at is not None and not started_at <= occurred_at <= ended_at:
+            continue
+        events[match["service"]].append(
+            (index, match["starting"] is not None, occurred_at)
+        )
+    excluded: set[int] = set()
+    for sequence in events.values():
+        if len(sequence) != 2 or not sequence[0][1] or sequence[1][1]:
+            continue
+        first, last = sequence[0][2], sequence[1][2]
+        if (first is None) != (last is None):
+            continue
+        if first is not None and last is not None and last < first:
+            continue
+        excluded.update(event[0] for event in sequence)
+    return excluded
 
 
 def _safe_log_text(line: str) -> str:
@@ -618,12 +658,15 @@ class LogsHealthCheckHandler:
         samples: dict[str, str] = {}
         times: dict[str, list[datetime]] = defaultdict(list)
         analyzed_lines = 0
-        for line in lines[:200_000]:
+        routine_startups = _completed_s6_startup_lines(
+            source, lines, started_at, ended_at
+        )
+        for index, line in enumerate(lines[:200_000]):
             occurred_at = _parse_log_timestamp(line)
             if occurred_at is not None and not (started_at <= occurred_at <= ended_at):
                 continue
             analyzed_lines += 1
-            if not _is_log_anomaly(source, line):
+            if index in routine_startups or not _is_log_anomaly(source, line):
                 continue
             signature = _signature(line)
             grouped[signature] += 1
@@ -697,10 +740,15 @@ class LogsInvestigateHandler:
         times: dict[str, list[datetime]] = defaultdict(list)
         matched_lines = 0
         needle = request.pattern.casefold()
-        for line in eligible[:200_000]:
+        routine_startups = _completed_s6_startup_lines(
+            request.source, eligible, request.window_started_at, request.window_ended_at
+        )
+        for index, line in enumerate(eligible[:200_000]):
             if needle in line.casefold():
                 matched_lines += 1
-                if not _is_log_anomaly(request.source, line):
+                if index in routine_startups or not _is_log_anomaly(
+                    request.source, line
+                ):
                     continue
                 signature = _signature(line)
                 grouped[signature] += 1
