@@ -2,11 +2,15 @@
 
 ## Non publié
 
+## [0.8.15] — 2026-09-21 — Cycles s6-rc de démarrage
+
 - Sur les sources Supervisor HA-01, LINKY-01 et ZWAVE-01, une unique paire INFO
   `s6-rc` de démarrage puis succès du même service n'est plus une anomalie.
   Les répétitions, paires incomplètes, erreurs et dates incohérentes restent
   détectées. Les lignes analysées et correspondances restent comptées ; aucune
   date n'est inventée et les limites de collecte restent signalées.
+
+## [0.8.14] — 2026-09-20 — Lignes d'accès HTTP
 
 - Les mots de la cible d'une ligne d'accès HTTP reconnue ne déterminent plus
   l'anomalie ni sa criticité : un GET 200 contenant `critical` dans son URL ne
@@ -14,10 +18,14 @@
   cible et les réponses 5xx restent détectés dans les deux collectes, y compris
   avec une URL longue. Les correspondances ciblées restent comptées.
 
+## [0.8.13] — 2026-09-20 — Priorité aux groupes critiques
+
 - Les collectes générales et ciblées conservent les groupes critiques avant
   les autres lors du plafonnement à 64 groupes, même avec une seule occurrence.
   Les messages `CRITICAL` et `FATAL` sont détectés sans nécessiter un autre mot
   d'erreur. Les compteurs et le signalement de troncature restent conservés.
+
+## [0.8.12] — 2026-09-20 — Plafonds de collecte Supervisor
 
 - Les collectes Supervisor demandent une ligne témoin au-delà du plafond de
   10 000 lignes et distinguent un volume exactement égal au plafond d'octets
@@ -26,17 +34,23 @@
   incomplet. Le message d'erreur brut n'est plus intégré aux preuves : seul
   le type d'erreur est conservé, sans URL ni identifiant exposé par l'exception.
 
+## [0.8.11] — 2026-09-19 — Signalement de troncature
+
 - Le contrôle général des journaux signale `truncated=true` lorsque l'analyse
   dépasse 200 000 lignes ou 64 groupes, même si la collecte n'a pas atteint sa
   limite d'octets. Une anomalie absente n'est déclarée disparue que pour une
   source effectivement collectée sans troncature ; un contrôle partiel ne
   déclare plus disparues les anomalies des autres sources.
 
+## [0.8.10] — 2026-09-19 — Messages de maintenance Z-Wave
+
 - Sur ZWAVE-01, les messages INFO exacts de début de vérification des firmwares
   et de démarrage du stockage des sauvegardes ne créent plus seuls une anomalie
   ni une corrélation. Les variantes d'échec, les niveaux WARNING/ERROR et les
   autres sources conservent leur détection ; les correspondances ciblées restent
   comptées. Les messages de cycle des services `s6-rc` ne sont pas modifiés.
+
+## [0.8.9] — 2026-09-16 — Déconnexions Z-Wave et dates des journaux
 
 - Le message INFO exact de déconnexion d'un client Z-WAVE-SERVER sur ZWAVE-01
   ne constitue plus à lui seul une anomalie ni une corrélation. Les erreurs,
@@ -47,13 +61,12 @@
   Un changement de jour ou d'heure ne crée plus une nouvelle signature pour
   le même message. Les dates réelles des observations restent conservées.
 
-## Non publié
+## [0.8.8] — 2026-09-15 — Masquage des sessions caméra
 
 - Les paramètres de session caméra dans les chemins `/stok=…/` sont masqués
   avant regroupement des journaux et extraction des références. Les anciennes
   signatures de référence sont également masquées et regroupées pour conserver
   la comparaison des occurrences sans signaler une fausse nouveauté.
-
 ## [0.8.7] — 2026-09-15 — Diagnostics et journaux fiables
 
 - Une réponse IA ne respectant pas le schéma est régénérée une seule fois avec
