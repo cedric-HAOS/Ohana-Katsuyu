@@ -2,6 +2,8 @@
 
 ## Non publié
 
+## [0.8.16] — 2026-09-25 — Heures de Paris et dates des journaux Home Assistant
+
 - Les horodatages sans fuseau des journaux Home Assistant et de ses add-ons
   sont lus en heure de Paris (confirmé le 25 septembre), et non plus en UTC.
   Les fenêtres d'analyse de HA-01, LINKY-01 et ZWAVE-01 étaient décalées de
