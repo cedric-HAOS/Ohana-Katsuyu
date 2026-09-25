@@ -1218,20 +1218,20 @@ def _inline_health(source: str, lines: list[str], started: str, ended: str):
     )["sources"][0]
 
 
-def test_clock_only_addon_lines_are_dated_and_windowed() -> None:
+def test_clock_only_addon_lines_are_dated_in_paris_and_windowed() -> None:
     # LINKY-01, 25 September: 8 of 11 teleinfo2mqtt findings had no date.
     source = _inline_health(
         "linky-01",
         [
-            "12:52:10.123 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
-            "12:52:40.456 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
+            "14:52:10.123 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
+            "14:52:40.456 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
             "09:00:00.000 WARN teleinfo2mqtt: unable to publish frame to "
             "ohana-agent [http://192.168.1.10:8770]",
         ],
         "2026-09-25T14:00:00+02:00",
         "2026-09-25T15:00:00+02:00",
     )
-    assert source["analyzed_lines"] == 2  # 09:00 is outside the window.
+    assert source["analyzed_lines"] == 2  # 09:00 Paris is outside the window.
     [finding] = source["findings"]
     assert finding["occurrences"] == 2
     assert finding["first_at"] == "2026-09-25T12:52:10Z"
@@ -1260,7 +1260,7 @@ def test_traceback_continuation_belongs_to_its_timestamped_record() -> None:
     source = _inline_health(
         "ha-01",
         [
-            "2026-09-25 12:40:00.123 ERROR (MainThread) [homeassistant] "
+            "2026-09-25 14:40:00.123 ERROR (MainThread) [homeassistant] "
             "Error doing job: Future exception was never retrieved",
             "Traceback (most recent call last):",
             '  File "/usr/src/homeassistant/core.py", line 10, in run',
@@ -1282,7 +1282,7 @@ def test_dateless_s6_lines_are_not_swallowed_as_continuations() -> None:
     source = _inline_health(
         "ha-01",
         [
-            "2026-09-25 12:40:00 ERROR (MainThread) [x] failed",
+            "2026-09-25 14:40:00 ERROR (MainThread) [x] failed",
             "s6-rc: info: service example: starting",
         ],
         "2026-09-25T14:00:00+02:00",
@@ -1324,3 +1324,27 @@ def test_supervisor_line_cap_is_not_a_loss_when_the_window_is_covered(
         window_started_at=datetime(2026, 9, 24, 4, 45, tzinfo=UTC),
     )
     assert reported is truncated
+
+
+def test_zone_less_home_assistant_times_are_paris_wall_clock() -> None:
+    # HA-01 logs "2026-09-25 14:50:32" for 12:50:32 UTC. Read as UTC, the
+    # Mosquitto disconnection fell outside every 1-hour incident window.
+    source = _inline_health(
+        "ha-01",
+        [
+            "2026-09-25 14:50:32.001 WARNING (MainThread) "
+            "[homeassistant.components.mqtt.client] Disconnected from MQTT server",
+            "2026-12-01 10:00:00 ERROR (MainThread) [x] winter failure",
+        ],
+        "2026-09-25T13:51:56+02:00",
+        "2026-09-25T14:51:56+02:00",
+    )
+    [finding] = source["findings"]
+    assert finding["last_at"] == "2026-09-25T12:50:32.001000Z"
+    from datetime import datetime
+
+    from ohana_katsuyu.handlers import _parse_log_timestamp
+
+    assert _parse_log_timestamp("2026-12-01 10:00:00 winter") == datetime.fromisoformat(
+        "2026-12-01T09:00:00+00:00"
+    )

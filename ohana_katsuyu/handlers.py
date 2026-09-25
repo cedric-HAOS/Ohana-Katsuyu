@@ -272,8 +272,32 @@ def _parse_log_timestamp(line: str) -> datetime | None:
     except ValueError:
         return None
     if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
+        # Home Assistant and its add-ons log Europe/Paris wall-clock times.
+        return _paris_wall_clock_to_utc(value)
     return value.astimezone(UTC)
+
+
+def _last_sunday_utc(year: int, month: int) -> datetime:
+    """01:00 UTC on the last Sunday of March or October, when EU clocks change."""
+    last = datetime(year, month + 1, 1, 1, tzinfo=UTC) - timedelta(days=1)
+    return last - timedelta(days=(last.weekday() + 1) % 7)
+
+
+def _paris_offset(instant: datetime) -> timedelta:
+    """Europe/Paris offset; Windows has no tz database without tzdata."""
+    instant = instant.astimezone(UTC)
+    summer = (
+        _last_sunday_utc(instant.year, 3)
+        <= instant
+        < _last_sunday_utc(instant.year, 10)
+    )
+    return timedelta(hours=2 if summer else 1)
+
+
+def _paris_wall_clock_to_utc(value: datetime) -> datetime:
+    """Convert a zone-less Europe/Paris wall-clock time to UTC."""
+    wall = value.replace(tzinfo=UTC)
+    return wall - _paris_offset(wall - timedelta(hours=2))
 
 
 def _covers_window(lines: list[bytes], window_started_at: datetime | None) -> bool:
@@ -303,13 +327,14 @@ def _line_time(line: str, window_ended_at: datetime) -> datetime | None:
     hour, minute, second = (int(match.group(index)) for index in (1, 2, 3))
     if hour > 23 or minute > 59 or second > 59:
         return None
-    # Read like zone-less full timestamps (UTC), on the latest day that keeps
-    # the time within the analysed window's end.
+    # A Paris wall-clock time on the latest day that keeps it within the
+    # analysed window's end, like zone-less full timestamps.
     end = window_ended_at.astimezone(UTC)
-    candidate = end.replace(hour=hour, minute=minute, second=second, microsecond=0)
-    if candidate > end:
+    end_wall = (end + _paris_offset(end)).replace(tzinfo=None)
+    candidate = end_wall.replace(hour=hour, minute=minute, second=second, microsecond=0)
+    if candidate > end_wall:
         candidate -= timedelta(days=1)
-    return candidate
+    return _paris_wall_clock_to_utc(candidate)
 
 
 def _category(source: str, line: str) -> str:

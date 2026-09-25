@@ -2,6 +2,14 @@
 
 ## Non publié
 
+- Les horodatages sans fuseau des journaux Home Assistant et de ses add-ons
+  sont lus en heure de Paris (confirmé le 25 septembre), et non plus en UTC.
+  Les fenêtres d'analyse de HA-01, LINKY-01 et ZWAVE-01 étaient décalées de
+  deux heures : la déconnexion MQTT de l'arrêt de Mosquitto n'apparaissait dans
+  aucun contrôle d'incident. Les lignes à heure seule suivent la même règle.
+  Le décalage applique la règle européenne de l'heure d'été, sans dépendre de
+  `tzdata`, absent de Windows.
+
 - Contrôle des journaux, défauts relevés sur Konoha le 25 septembre :
   - les lignes qui ne portent qu'une heure (teleinfo2mqtt, 8 anomalies sur 11
     sans date sur LINKY-01) sont datées avec le jour de la fenêtre analysée et
