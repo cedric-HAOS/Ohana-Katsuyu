@@ -2,6 +2,18 @@
 
 ## Non publié
 
+- Contrôle des journaux, défauts relevés sur Konoha le 25 septembre :
+  - les lignes qui ne portent qu'une heure (teleinfo2mqtt, 8 anomalies sur 11
+    sans date sur LINKY-01) sont datées avec le jour de la fenêtre analysée et
+    filtrées par cette fenêtre, comme les horodatages sans fuseau ;
+  - les lignes de suite d'un enregistrement daté (cadres de traceback,
+    exceptions chaînées, texte de template) appartiennent à cet enregistrement
+    au lieu de devenir des anomalies séparées et sans date (10 sur HA-01) ; une
+    ligne `s6-rc` sans date reste analysée seule ;
+  - sur LINKY-01, le nom de l'add-on « teleinfo2mqtt » ne classe plus une ligne
+    en `serial` : une erreur MQTT est `mqtt`, un envoi HTTP vers l'Agent
+    `network`.
+
 ## [0.8.15] — 2026-09-21 — Cycles s6-rc de démarrage
 
 - Sur les sources Supervisor HA-01, LINKY-01 et ZWAVE-01, une unique paire INFO

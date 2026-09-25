@@ -1193,3 +1193,99 @@ def test_infra_backup_rejects_truncated_source_before_encryption(
             HandlerContext(job_id="job-1", worker_id="bubule", attempt=1),
         )
     assert not popen_called
+
+
+def _inline_health(source: str, lines: list[str], started: str, ended: str):
+    def provider(*_args) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "source": source,
+            "transport": "inline",
+            "content": "\n".join(lines),
+            "truncated": False,
+        }
+
+    return LogsHealthCheckHandler(provider).execute(
+        {
+            "sources": [source],
+            "window_started_at": started,
+            "window_ended_at": ended,
+            "max_bytes_per_source": 65536,
+            "baseline": [],
+            "incident_id": None,
+        },
+        _log_context(),
+    )["sources"][0]
+
+
+def test_clock_only_addon_lines_are_dated_and_windowed() -> None:
+    # LINKY-01, 25 September: 8 of 11 teleinfo2mqtt findings had no date.
+    source = _inline_health(
+        "linky-01",
+        [
+            "12:52:10.123 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
+            "12:52:40.456 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
+            "09:00:00.000 WARN teleinfo2mqtt: unable to publish frame to "
+            "ohana-agent [http://192.168.1.10:8770]",
+        ],
+        "2026-09-25T14:00:00+02:00",
+        "2026-09-25T15:00:00+02:00",
+    )
+    assert source["analyzed_lines"] == 2  # 09:00 is outside the window.
+    [finding] = source["findings"]
+    assert finding["occurrences"] == 2
+    assert finding["first_at"] == "2026-09-25T12:52:10Z"
+    assert finding["last_at"] == "2026-09-25T12:52:40Z"
+    assert finding["category"] == "mqtt"
+
+
+def test_linky_categories_name_the_failing_layer_not_the_addon() -> None:
+    source = _inline_health(
+        "linky-01",
+        [
+            "2026-09-25T14:52:10+02:00 WARN teleinfo2mqtt: unable to publish "
+            "frame to ohana-agent [http://192.168.1.10:8770] failed",
+            "2026-09-25T14:52:11+02:00 ERROR teleinfo2mqtt: checksum invalid",
+        ],
+        "2026-09-25T14:00:00+02:00",
+        "2026-09-25T15:00:00+02:00",
+    )
+    categories = {f["signature"][:60]: f["category"] for f in source["findings"]}
+    assert sorted(categories.values()) == ["network", "serial"]
+
+
+def test_traceback_continuation_belongs_to_its_timestamped_record() -> None:
+    # HA-01, 25 September: 10 dateless findings were traceback frames, chained
+    # exception headers and template text split from their error line.
+    source = _inline_health(
+        "ha-01",
+        [
+            "2026-09-25 12:40:00.123 ERROR (MainThread) [homeassistant] "
+            "Error doing job: Future exception was never retrieved",
+            "Traceback (most recent call last):",
+            '  File "/usr/src/homeassistant/core.py", line 10, in run',
+            "ValueError: could not convert string to float: 'unavailable'",
+            "During handling of the above exception, another exception occurred:",
+            "homeassistant.exceptions.TemplateError: ValueError: template error",
+            "{{ total_offset + mesure_actuelle }}",
+        ],
+        "2026-09-25T14:00:00+02:00",
+        "2026-09-25T15:00:00+02:00",
+    )
+    assert source["analyzed_lines"] == 7
+    [finding] = source["findings"]
+    assert finding["occurrences"] == 1
+    assert finding["last_at"] == "2026-09-25T12:40:00.123000Z"
+
+
+def test_dateless_s6_lines_are_not_swallowed_as_continuations() -> None:
+    source = _inline_health(
+        "ha-01",
+        [
+            "2026-09-25 12:40:00 ERROR (MainThread) [x] failed",
+            "s6-rc: info: service example: starting",
+        ],
+        "2026-09-25T14:00:00+02:00",
+        "2026-09-25T15:00:00+02:00",
+    )
+    assert len(source["findings"]) == 2

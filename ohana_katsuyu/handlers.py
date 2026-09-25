@@ -17,7 +17,7 @@ import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from threading import Event
 from time import monotonic, process_time, sleep
@@ -173,6 +173,15 @@ _HTTP_ACCESS = re.compile(
     r'HTTP/\d(?:\.\d)?"\s+(?P<status>[1-5]\d{2})\b',
     re.IGNORECASE,
 )
+# Some add-ons (teleinfo2mqtt) print only a clock time, without a date.
+_TIME_ONLY = re.compile(r"^\s*\[?(\d{2}):(\d{2}):(\d{2})(?:[.,](\d{1,6}))?\b")
+# Lines continuing the previous timestamped record (traceback frames, chained
+# exceptions, multi-line templates) belong to that record.
+_CONTINUATION = re.compile(
+    r"^(?:\s|Traceback \(most recent call last\)|During handling of the above "
+    r"exception|The above exception was the direct cause|"
+    r"[A-Za-z_][\w.]*(?:Error|Exception)\b|\{\{|\{%)"
+)
 _S6_STARTUP = re.compile(
     r"s6-rc: info: service (?P<service>[a-zA-Z0-9_-]+)"
     r"(?:: (?P<starting>starting)| (?P<started>successfully started))"
@@ -267,8 +276,35 @@ def _parse_log_timestamp(line: str) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def _line_time(line: str, window_ended_at: datetime) -> datetime | None:
+    """Date a log line, inferring the day of clock-only add-on lines."""
+    occurred_at = _parse_log_timestamp(line)
+    if occurred_at is not None:
+        return occurred_at
+    match = _TIME_ONLY.match(line)
+    if match is None:
+        return None
+    hour, minute, second = (int(match.group(index)) for index in (1, 2, 3))
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+    # Read like zone-less full timestamps (UTC), on the latest day that keeps
+    # the time within the analysed window's end.
+    end = window_ended_at.astimezone(UTC)
+    candidate = end.replace(hour=hour, minute=minute, second=second, microsecond=0)
+    if candidate > end:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
 def _category(source: str, line: str) -> str:
     lowered = _log_event_text(line)[0].lower()
+    if source == "linky-01":
+        # The add-on name "teleinfo2mqtt" says nothing about the failing layer.
+        specific = lowered.replace("teleinfo2mqtt", "")
+        if "mqtt" in specific:
+            return "mqtt"
+        if "http" in specific:
+            return "network"
     if source == "zwave-01" and any(
         term in lowered for term in ("node", "transmission", "interview", "routing")
     ):
@@ -661,12 +697,26 @@ class LogsHealthCheckHandler:
         routine_startups = _completed_s6_startup_lines(
             source, lines, started_at, ended_at
         )
+        record_at: datetime | None = None
         for index, line in enumerate(lines[:200_000]):
-            occurred_at = _parse_log_timestamp(line)
+            occurred_at = _line_time(line, ended_at)
+            continuation = (
+                occurred_at is None
+                and record_at is not None
+                and _CONTINUATION.match(line) is not None
+            )
+            if continuation:
+                occurred_at = record_at
+            else:
+                record_at = occurred_at
             if occurred_at is not None and not (started_at <= occurred_at <= ended_at):
                 continue
             analyzed_lines += 1
-            if index in routine_startups or not _is_log_anomaly(source, line):
+            if (
+                continuation
+                or index in routine_startups
+                or not _is_log_anomaly(source, line)
+            ):
                 continue
             signature = _signature(line)
             grouped[signature] += 1
