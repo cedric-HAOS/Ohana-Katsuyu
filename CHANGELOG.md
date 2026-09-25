@@ -13,6 +13,12 @@
   - sur LINKY-01, le nom de l'add-on « teleinfo2mqtt » ne classe plus une ligne
     en `serial` : une erreur MQTT est `mqtt`, un envoi HTTP vers l'Agent
     `network`.
+- Le plafond de 10 000 lignes de `/core/logs/latest` n'est plus une collecte
+  tronquée lorsque la plus ancienne ligne conservée précède déjà le début de la
+  fenêtre analysée : aucune ligne de la fenêtre n'a été perdue. Les contrôles
+  quotidiens de LINKY-01 et ZWAVE-01 étaient toujours marqués tronqués, ce qui
+  empêchait la résolution de leurs incidents de journaux. Sans date lisible, la
+  troncature reste signalée.
 
 ## [0.8.15] — 2026-09-21 — Cycles s6-rc de démarrage
 

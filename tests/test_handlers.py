@@ -1289,3 +1289,38 @@ def test_dateless_s6_lines_are_not_swallowed_as_continuations() -> None:
         "2026-09-25T15:00:00+02:00",
     )
     assert len(source["findings"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("oldest_kept", "truncated"),
+    [
+        ("2026-09-24T04:00:00+00:00", False),  # kept lines reach past the window
+        ("2026-09-24T06:00:00+00:00", True),  # lines of the window were dropped
+    ],
+)
+def test_supervisor_line_cap_is_not_a_loss_when_the_window_is_covered(
+    monkeypatch, oldest_kept, truncated
+):
+    # LINKY-01 and ZWAVE-01 daily checks were always "truncated": the Core
+    # log tail exceeds 10,000 lines even when those lines span the whole day.
+    content = (
+        b"2026-09-24T00:00:00+00:00 INFO dropped\n"
+        + (oldest_kept.encode() + b" INFO kept\n") * 10_000
+    )
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen", lambda *a, **k: io.BytesIO(content)
+    )
+    from datetime import UTC, datetime
+
+    from ohana_katsuyu.handlers import _DirectLogReader
+
+    _payload, reported = _DirectLogReader._read_supervisor(
+        "http://ha.test:8123",
+        "private",
+        [],
+        4 * 1024 * 1024,
+        5,
+        verify_tls=True,
+        window_started_at=datetime(2026, 9, 24, 4, 45, tzinfo=UTC),
+    )
+    assert reported is truncated

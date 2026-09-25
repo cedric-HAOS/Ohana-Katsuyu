@@ -276,6 +276,22 @@ def _parse_log_timestamp(line: str) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def _covers_window(lines: list[bytes], window_started_at: datetime | None) -> bool:
+    """Whether the oldest kept line already predates the analysed window.
+
+    /core/logs/latest returns the newest lines whatever the window; reaching
+    its 10,000-line cap loses nothing when the kept lines reach back past the
+    window start. Unknown dates keep the conservative truncation.
+    """
+    if window_started_at is None:
+        return False
+    for line in lines[:50]:
+        oldest = _parse_log_timestamp(line.decode("utf-8", errors="replace"))
+        if oldest is not None:
+            return oldest <= window_started_at
+    return False
+
+
 def _line_time(line: str, window_ended_at: datetime) -> datetime | None:
     """Date a log line, inferring the day of clock-only add-on lines."""
     occurred_at = _parse_log_timestamp(line)
@@ -388,6 +404,7 @@ class _DirectLogReader:
         source: str,
         max_bytes: int,
         context: HandlerContext,
+        window_started_at: datetime | None = None,
     ) -> tuple[list[str], int, bool]:
         if not context.job_id or not context.worker_id or context.attempt < 1:
             raise RuntimeError("log retrieval requires an owning job attempt")
@@ -433,6 +450,7 @@ class _DirectLogReader:
                     max_bytes,
                     min(max(timeout, 5), 60),
                     verify_tls=descriptor.get("verify_tls", True) is not False,
+                    window_started_at=window_started_at,
                 )
                 return (
                     payload.decode("utf-8", errors="replace").splitlines(),
@@ -483,6 +501,7 @@ class _DirectLogReader:
         timeout: float,
         *,
         verify_tls: bool,
+        window_started_at: datetime | None = None,
     ) -> tuple[bytes, bool]:
         normalized_base_url = base_url.rstrip("/")
         tls_context = None
@@ -509,8 +528,11 @@ class _DirectLogReader:
             ) as response:
                 payload = response.read(max_bytes + 1)
             lines = payload.splitlines(keepends=True)
-            truncated |= len(payload) > max_bytes or len(lines) > 10_000
-            return b"".join(lines[-10_000:])
+            kept = lines[-10_000:]
+            truncated |= len(payload) > max_bytes or (
+                len(lines) > 10_000 and not _covers_window(kept, window_started_at)
+            )
+            return b"".join(kept)
 
         def combine(fragments):
             payload = b"\n".join(fragments)
@@ -613,7 +635,10 @@ class LogsHealthCheckHandler:
                 source,
             )
             lines, fetched_bytes, truncated = self.reader.read(
-                source, request.max_bytes_per_source, runtime
+                source,
+                request.max_bytes_per_source,
+                runtime,
+                request.window_started_at,
             )
             results.append(
                 self._analyze_source(
@@ -776,7 +801,7 @@ class LogsInvestigateHandler:
         runtime = context or HandlerContext()
         runtime.report(10, "logs.fetching", request.source)
         lines, _fetched_bytes, truncated = self.reader.read(
-            request.source, request.max_bytes, runtime
+            request.source, request.max_bytes, runtime, request.window_started_at
         )
         eligible: list[str] = []
         for line in lines:
