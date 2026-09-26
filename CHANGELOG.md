@@ -2,6 +2,8 @@
 
 ## Non publié
 
+## [0.8.17] — 2026-09-26 — Couverture des journaux à heure seule
+
 - LINKY-01 n'est plus déclaré tronqué à tort : teleinfo2mqtt écrit ses
   lignes avec l'heure seule (`bunyan -o short`). Dès que le Supervisor
   renvoyait ses 10 000 lignes, le contrôle de couverture ne trouvait aucune
