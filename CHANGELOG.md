@@ -2,6 +2,17 @@
 
 ## Non publié
 
+- LINKY-01 n'est plus déclaré tronqué à tort : teleinfo2mqtt écrit ses
+  lignes avec l'heure seule (`bunyan -o short`). Dès que le Supervisor
+  renvoyait ses 10 000 lignes, le contrôle de couverture ne trouvait aucune
+  date complète et déclarait la collecte tronquée, même pour une fenêtre
+  d'une heure couverte par 1,4 Mo de journaux. La date de la plus ancienne
+  ligne est maintenant déduite en remontant depuis la plus récente (un
+  passage de minuit à chaque retour en arrière de l'heure) ; un silence de
+  plus d'un jour la rajeunit, ce qui reste prudent. Une collecte tronquée
+  bloquait la disparition des anomalies, donc la résolution des incidents de
+  journaux de LINKY-01.
+
 ## [0.8.16] — 2026-09-25 — Heures de Paris et dates des journaux Home Assistant
 
 - Les horodatages sans fuseau des journaux Home Assistant et de ses add-ons

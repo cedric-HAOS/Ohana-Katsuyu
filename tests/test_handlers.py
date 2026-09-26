@@ -1326,6 +1326,56 @@ def test_supervisor_line_cap_is_not_a_loss_when_the_window_is_covered(
     assert reported is truncated
 
 
+@pytest.mark.parametrize(
+    ("window_start_paris", "truncated"),
+    [
+        ((26, 18, 59), False),  # one-hour check: the kept lines span two days
+        ((25, 20, 30), False),  # across midnight: 20:00:09 on the 25th is kept
+        ((25, 20, 0), True),  # 20:00:00 was the line dropped beyond the cap
+    ],
+)
+def test_clock_only_addon_lines_can_cover_the_window(
+    monkeypatch, window_start_paris, truncated
+):
+    # teleinfo2mqtt prints "HH:MM:SS.mmmZ" through `bunyan -o short`: LINKY-01
+    # was reported truncated even for a one-hour window.
+    from datetime import UTC, datetime, timedelta
+
+    from ohana_katsuyu.handlers import _DirectLogReader
+
+    oldest = datetime(2026, 9, 25, 20, 0)  # Paris wall clock
+    content = b"".join(
+        (oldest + timedelta(seconds=9 * index)).strftime("%H:%M:%S.000Z").encode()
+        + b"  INFO teleinfo2mqtt: frame\n"
+        for index in range(10_001)
+    )
+    newest = oldest + timedelta(seconds=9 * 10_000)  # 26 September, 21:00
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen", lambda *a, **k: io.BytesIO(content)
+    )
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 26, 19, 5, tzinfo=UTC)  # 21:05 in Paris
+
+    monkeypatch.setattr("ohana_katsuyu.handlers.datetime", Clock)
+    day, hour, minute = window_start_paris
+    started = datetime(2026, 9, day, hour, minute, tzinfo=UTC) - timedelta(hours=2)
+    assert newest.day == 26
+
+    _payload, reported = _DirectLogReader._read_supervisor(
+        "http://ha.test:8123",
+        "private",
+        [],
+        4 * 1024 * 1024,
+        5,
+        verify_tls=True,
+        window_started_at=started,
+    )
+    assert reported is truncated
+
+
 def test_zone_less_home_assistant_times_are_paris_wall_clock() -> None:
     # HA-01 logs "2026-09-25 14:50:32" for 12:50:32 UTC. Read as UTC, the
     # Mosquitto disconnection fell outside every 1-hour incident window.

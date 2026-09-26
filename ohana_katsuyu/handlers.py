@@ -300,7 +300,11 @@ def _paris_wall_clock_to_utc(value: datetime) -> datetime:
     return wall - _paris_offset(wall - timedelta(hours=2))
 
 
-def _covers_window(lines: list[bytes], window_started_at: datetime | None) -> bool:
+def _covers_window(
+    lines: list[bytes],
+    window_started_at: datetime | None,
+    now: datetime | None = None,
+) -> bool:
     """Whether the oldest kept line already predates the analysed window.
 
     /core/logs/latest returns the newest lines whatever the window; reaching
@@ -313,7 +317,39 @@ def _covers_window(lines: list[bytes], window_started_at: datetime | None) -> bo
         oldest = _parse_log_timestamp(line.decode("utf-8", errors="replace"))
         if oldest is not None:
             return oldest <= window_started_at
-    return False
+    oldest = _oldest_clock_only_time(lines, now or datetime.now(UTC))
+    return oldest is not None and oldest <= window_started_at
+
+
+def _oldest_clock_only_time(lines: list[bytes], now: datetime) -> datetime | None:
+    """Date the oldest clock-only line by walking back from the newest one.
+
+    teleinfo2mqtt logs "21:59:31.123" without a day. The newest line is at
+    most ``now``; each time the clock goes forward while walking back, a
+    midnight was crossed. A silence longer than a day is under-counted, which
+    only makes the lines look more recent: coverage stays conservative.
+    """
+    end = now.astimezone(UTC)
+    # Tolerate a few minutes of clock skew between the node and Katsuyu.
+    later = (end + _paris_offset(end)).replace(tzinfo=None) + timedelta(minutes=5)
+    day = later.date()
+    oldest: datetime | None = None
+    for raw in reversed(lines):
+        match = _TIME_ONLY.match(raw.decode("utf-8", errors="replace"))
+        if match is None:
+            continue
+        hour, minute, second = (int(match.group(index)) for index in (1, 2, 3))
+        if hour > 23 or minute > 59 or second > 59:
+            continue
+        candidate = datetime.combine(day, later.time()).replace(
+            hour=hour, minute=minute, second=second, microsecond=0
+        )
+        if candidate > later:
+            day -= timedelta(days=1)
+            candidate -= timedelta(days=1)
+        later = candidate
+        oldest = candidate
+    return _paris_wall_clock_to_utc(oldest) if oldest is not None else None
 
 
 def _line_time(line: str, window_ended_at: datetime) -> datetime | None:
