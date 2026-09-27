@@ -2,6 +2,8 @@
 
 ## Non publié
 
+## [0.8.18] — 2026-09-27 — Faux positifs INFO et sauvegarde NVM
+
 - Faux positifs d'INFRA-01 : les lignes INFO et DEBUG de l'Agent et de Vision
   ne sont plus des anomalies, sauf si elles portent un vrai mot d'échec
   (erreur, exception, délai dépassé, refus…). Même règle pour le démarrage et
