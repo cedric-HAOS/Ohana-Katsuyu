@@ -669,6 +669,13 @@ def test_journal_iso_dates_do_not_create_new_signatures_across_days():
         ("INFO Z-WAVE: Starting bulk firmware update check for all nodes failed", True),
         ("INFO OTHER: Backup store started", True),
         ("INFO Z-WAVE: Starting driver", True),
+        ("INFO BACKUP: Backup NVM started", False),
+        ("CNTRLR   stopping hardware watchdog...", False),
+        ("CNTRLR   waiting for the controller to reconnect...", False),
+        ("CNTRLR   reconnected and restarted", False),
+        ("CNTRLR   starting hardware watchdog...", False),
+        ("ERROR BACKUP: Backup NVM started", True),
+        ("CNTRLR   Failed to reconnect after soft reset", True),
     ],
 )
 def test_zwave_info_activity_alone_does_not_create_anomaly_or_correlation(
@@ -1398,3 +1405,46 @@ def test_zone_less_home_assistant_times_are_paris_wall_clock() -> None:
     assert _parse_log_timestamp("2026-12-01 10:00:00 winter") == datetime.fromisoformat(
         "2026-12-01T09:00:00+00:00"
     )
+
+
+@pytest.mark.parametrize(
+    "line,anomaly",
+    [
+        (
+            "infra-01 ohana-agent[980629]: 2026-09-26 19:15:26,280 INFO "
+            "ohana_agent.tsunade.investigations — Investigation 1 started: "
+            "zwave.status",
+            False,
+        ),
+        (
+            "infra-01 ohana-agent[980629]: 2026-09-26 20:23:01,100 INFO "
+            "ohana_agent.runtime.agent — Ohana-Agent shutdown requested.",
+            False,
+        ),
+        (
+            "infra-01 ohana-vision[980634]: INFO:     Started server process [1]",
+            False,
+        ),
+        ("infra-01 systemd[1]: Stopping ohana-agent.service - Ohana Agent...", False),
+        ("infra-01 systemd[1]: Started ohana-vision.service - Ohana Vision.", False),
+        (
+            "infra-01 ohana-agent[980629]: 2026-09-27 14:10:39,309 WARNING "
+            "ohana_agent.observation — Unable to deliver observation: Timed out",
+            True,
+        ),
+        (
+            "infra-01 ohana-agent[980629]: 2026-09-27 14:10:39,309 INFO "
+            "ohana_agent.jobs — Job 1 failed",
+            True,
+        ),
+        (
+            "infra-01 systemd[1]: ohana-agent.service: Failed with result 'exit-code'.",
+            True,
+        ),
+        ("infra-01 systemd[1]: Stopping dnsmasq.service - dnsmasq...", True),
+    ],
+)
+def test_ohana_lifecycle_on_infra_01_is_not_an_anomaly(line: str, anomaly: bool):
+    from ohana_katsuyu.handlers import _is_log_anomaly
+
+    assert _is_log_anomaly("infra-01", "2026-09-26T21:15:26+02:00 " + line) is anomaly

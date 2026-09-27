@@ -242,6 +242,27 @@ def _log_event_text(line: str) -> tuple[str, int | None]:
     )
 
 
+_OHANA_INFO = re.compile(
+    r"\bohana-(?:agent|vision)\[\d+\]:\s+(?:\S+\s+\S+\s+)?(?:DEBUG|INFO)\b"
+)
+_OHANA_UNIT_LIFECYCLE = re.compile(
+    r"\bsystemd\[\d+\]:\s+(?:Starting|Started|Stopping|Stopped)\s+"
+    r"ohana-[a-z0-9-]+\.service\b(?:\s+-\s+[^.]*)?\.*\s*$"
+)
+_REAL_FAILURE = re.compile(
+    r"\b(?:critical|fatal|error|exception|traceback|failed|failure|timeout|"
+    r"timed out|refused|econnrefused|dead|unavailable)\b",
+    re.IGNORECASE,
+)
+# The nightly Z-Wave JS UI NVM backup soft-resets the controller.
+_ZWAVE_NVM_BACKUP = re.compile(
+    r"(?:INFO\s+BACKUP:\s+Backup NVM started|"
+    r"CNTRLR\s+(?:stopping hardware watchdog|starting hardware watchdog|"
+    r"waiting for the controller to reconnect|reconnected and restarted))\.*",
+    re.IGNORECASE,
+)
+
+
 def _is_log_anomaly(source: str, line: str) -> bool:
     """Known plain INFO activity messages alone do not establish a fault."""
     if source == "zwave-01":
@@ -252,7 +273,12 @@ def _is_log_anomaly(source: str, line: str) -> bool:
             r"BACKUP:\s+Backup store started)\.?",
             message,
             re.I,
-        ):
+        ) or _ZWAVE_NVM_BACKUP.fullmatch(message):
+            return False
+    if source == "infra-01" and not _REAL_FAILURE.search(line):
+        # Ohana's own components report faults at WARNING or above, and their
+        # restarts (deployments) are already followed by host.health.
+        if _OHANA_INFO.search(line) or _OHANA_UNIT_LIFECYCLE.search(line):
             return False
     event, http_status = _log_event_text(line)
     return bool(_ANOMALY.search(event)) or (

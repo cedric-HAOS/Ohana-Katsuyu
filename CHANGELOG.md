@@ -2,6 +2,16 @@
 
 ## Non publié
 
+- Faux positifs d'INFRA-01 : les lignes INFO et DEBUG de l'Agent et de Vision
+  ne sont plus des anomalies, sauf si elles portent un vrai mot d'échec
+  (erreur, exception, délai dépassé, refus…). Même règle pour le démarrage et
+  l'arrêt des unités systemd `ohana-*`, c'est-à-dire les déploiements. Leurs
+  redémarrages sont déjà suivis par `host.health`. « Investigation … started:
+  zwave.status » était classé en anomalie `zwave`.
+- ZWAVE-01 : la sauvegarde NVM nocturne de Z-Wave JS UI (« Backup NVM
+  started », arrêt et reprise du watchdog, reconnexion du contrôleur) n'est
+  plus une anomalie. Un échec de reconnexion en reste une.
+
 ## [0.8.17] — 2026-09-26 — Couverture des journaux à heure seule
 
 - LINKY-01 n'est plus déclaré tronqué à tort : teleinfo2mqtt écrit ses
