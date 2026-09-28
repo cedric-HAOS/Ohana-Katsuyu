@@ -2,6 +2,12 @@
 
 ## Non publié
 
+## [0.10.0] — 2026-09-28 — Runtime local déclaré à l'Agent
+
+Publiée le jour même de 0.9.0, à la demande de l'utilisateur.
+Mettre à jour après Ohana-Agent 1.40.0 ; avec un Agent plus ancien, Katsuyu
+redemande seulement toutes les heures.
+
 - Vitaux (Phase 5, lot 4) : Katsuyu déclare à l'Agent l'état du runtime
   local des capacités qui en dépendent — moteur llama-server et modèle IA
   (`unverified` tant que l'empreinte SHA-256 n'a pas été vérifiée par un job,
