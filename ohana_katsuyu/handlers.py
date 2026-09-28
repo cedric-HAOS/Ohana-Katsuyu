@@ -175,6 +175,9 @@ _HTTP_ACCESS = re.compile(
 )
 # Some add-ons (teleinfo2mqtt) print only a clock time, without a date.
 _TIME_ONLY = re.compile(r"^\s*\[?(\d{2}):(\d{2}):(\d{2})(?:[.,](\d{1,6}))?\b")
+# Newest lines read per Supervisor log. ZWAVE-01 logged more than 10,000 lines
+# a day, so every daily check was reported truncated.
+_SUPERVISOR_LINES = 50_000
 # Supervisor "verbose" add-on logs: zone-less UTC journal time, host,
 # identifier[pid], then the add-on's own line.
 _VERBOSE_PREFIX = re.compile(
@@ -340,8 +343,8 @@ def _covers_window(
 ) -> bool:
     """Whether the oldest kept line already predates the analysed window.
 
-    /core/logs/latest returns the newest lines whatever the window; reaching
-    its 10,000-line cap loses nothing when the kept lines reach back past the
+    The Supervisor returns the newest lines whatever the window; reaching
+    the line cap loses nothing when the kept lines reach back past the
     window start. Unknown dates keep the conservative truncation.
     """
     if window_started_at is None:
@@ -352,6 +355,27 @@ def _covers_window(
             return oldest <= window_started_at
     oldest = _oldest_clock_only_time(lines, now or datetime.now(UTC))
     return oldest is not None and oldest <= window_started_at
+
+
+def _from_window_start(
+    lines: list[bytes], window_started_at: datetime | None
+) -> list[bytes]:
+    """Drop the lines logged before the window, with their continuations.
+
+    Lines are only dropped once a dated line shows the log reaches back past
+    the window start; undated logs are kept whole.
+    """
+    if window_started_at is None:
+        return lines
+    reaches_back = False
+    for index, raw in enumerate(lines):
+        moment = _parse_log_timestamp(raw.decode("utf-8", errors="replace"))
+        if moment is None:
+            continue
+        if moment >= window_started_at:
+            return lines[index:] if reaches_back else lines
+        reaches_back = True
+    return [] if reaches_back else lines
 
 
 def _from_verbose_journal(line: bytes) -> bytes:
@@ -631,6 +655,7 @@ class _DirectLogReader:
             path: str, params: dict[str, object], *, verbose: bool = False
         ) -> bytes:
             nonlocal truncated
+            params = {**params, "lines": _SUPERVISOR_LINES + 1}
             if verbose:
                 params = {**params, "verbose": 1}
             query = urlencode(params)
@@ -647,26 +672,29 @@ class _DirectLogReader:
                 timeout=timeout,
                 context=tls_context,
             ) as response:
-                payload = response.read(max_bytes + 1)
+                # Lines older than the window are read, then dropped: only the
+                # window counts against max_bytes.
+                payload = response.read(max_bytes * 16 + 1)
             lines = payload.splitlines(keepends=True)
             if verbose:
                 lines = [_from_verbose_journal(line) for line in lines]
-            kept = lines[-10_000:]
-            truncated |= len(payload) > max_bytes or (
-                len(lines) > 10_000 and not _covers_window(kept, window_started_at)
+            kept = lines[-_SUPERVISOR_LINES:]
+            truncated |= len(payload) > max_bytes * 16 or (
+                len(lines) > _SUPERVISOR_LINES
+                and not _covers_window(kept, window_started_at)
             )
+            kept = _from_window_start(kept, window_started_at)
+            size = sum(len(line) for line in kept)
+            while kept and size > max_bytes:
+                size -= len(kept.pop(0))
+                truncated = True
             return b"".join(kept)
 
         def combine(fragments):
             payload = b"\n".join(fragments)
             return payload[:max_bytes], truncated or len(payload) > max_bytes
 
-        fragments = [
-            read_text(
-                "/core/logs/latest",
-                {"lines": 10_001, "no_colors": 1},
-            )
-        ]
+        fragments = [read_text("/core/logs/latest", {"no_colors": 1})]
         patterns = (
             [str(value).casefold() for value in addon_patterns]
             if isinstance(addon_patterns, list)
@@ -723,7 +751,7 @@ class _DirectLogReader:
                     fragments.append(
                         read_text(
                             f"/addons/{quote(slug, safe='')}/logs",
-                            {"lines": 10_001, "no_colors": 1},
+                            {"no_colors": 1},
                             # teleinfo2mqtt prints a clock without a date;
                             # the journal entry holds the real date.
                             verbose=True,

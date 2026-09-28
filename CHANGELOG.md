@@ -2,6 +2,15 @@
 
 ## Non publié
 
+- Journaux lus par le Supervisor : jusqu'à 50 000 lignes récentes au lieu de
+  10 000, pour le Core comme pour les add-ons. Les lignes antérieures à la
+  fenêtre (et leurs lignes de suite) sont écartées avant d'appliquer le
+  budget d'octets, qui garde les lignes les plus récentes. Chaque contrôle
+  quotidien de ZWAVE-01 était déclaré tronqué depuis le 20 septembre : plus
+  de 10 000 lignes en 24 h, alors que la collecte restait sous 1 Mo pour un
+  budget de 2 Mo. Tant que la collecte est tronquée, l'incident ne peut pas
+  se résoudre et les anomalies disparues ne sont pas reconnues.
+
 ## [0.8.19] — 2026-09-28 — Lignes d'add-on sans date
 
 - Lignes d'add-on sans date (teleinfo2mqtt) : Katsuyu demande au
