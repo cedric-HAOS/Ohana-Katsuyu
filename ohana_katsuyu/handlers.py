@@ -175,6 +175,13 @@ _HTTP_ACCESS = re.compile(
 )
 # Some add-ons (teleinfo2mqtt) print only a clock time, without a date.
 _TIME_ONLY = re.compile(r"^\s*\[?(\d{2}):(\d{2}):(\d{2})(?:[.,](\d{1,6}))?\b")
+# Supervisor "verbose" add-on logs: zone-less UTC journal time, host,
+# identifier[pid], then the add-on's own line.
+_VERBOSE_PREFIX = re.compile(
+    rb"^(?P<date>\d{4}-\d{2}-\d{2}) (?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?) "
+    rb"(?:\S* )?\S+: ?(?P<message>.*)$",
+    re.DOTALL,
+)
 # Lines continuing the previous timestamped record (traceback frames, chained
 # exceptions, multi-line templates) belong to that record.
 _CONTINUATION = re.compile(
@@ -347,56 +354,74 @@ def _covers_window(
     return oldest is not None and oldest <= window_started_at
 
 
-def _oldest_clock_only_time(lines: list[bytes], now: datetime) -> datetime | None:
-    """Date the oldest clock-only line by walking back from the newest one.
+def _from_verbose_journal(line: bytes) -> bytes:
+    """Give a clock-only add-on line the date its journal entry carries.
 
-    teleinfo2mqtt logs "21:59:31.123" without a day. The newest line is at
-    most ``now``; each time the clock goes forward while walking back, a
-    midnight was crossed. A silence longer than a day is under-counted, which
-    only makes the lines look more recent: coverage stays conservative.
+    Only the clock-only case changes: other lines keep the add-on's own text,
+    so their signatures, accepted noise and traceback grouping stay the same.
     """
-    end = now.astimezone(UTC)
+    match = _VERBOSE_PREFIX.match(line)
+    if match is None:
+        return line
+    message = match.group("message")
+    clock = _TIME_ONLY.match(message.decode("utf-8", errors="replace"))
+    if clock is None:
+        return message
+    dated = f"{match.group('date').decode()}T{match.group('time').decode()}Z"
+    return dated.encode() + message[clock.end() :]
+
+
+def _oldest_clock_only_time(lines: list[bytes], now: datetime) -> datetime | None:
+    """Date the oldest clock-only line by walking back from the newest one."""
+    times = _clock_only_times(
+        [raw.decode("utf-8", errors="replace") for raw in lines], now
+    )
+    return min(times.values()) if times else None
+
+
+# Lines of one add-on can be written a few seconds out of order.
+_CLOCK_JITTER = timedelta(minutes=5)
+
+
+def _clock_only_times(lines: list[str], collected_at: datetime) -> dict[int, datetime]:
+    """Date clock-only add-on lines by walking back from the newest one.
+
+    teleinfo2mqtt logs "21:59:31.123" without a day, and the Supervisor
+    returns every line since the add-on started, over several days. Dating
+    each line on the latest day before the window end put every earlier day
+    in the window: LINKY-01 counted about 2,760 refused frames a day, all of
+    them from Agent restarts days before. The newest line is at most
+    ``collected_at``; each time the clock goes forward while walking back, a
+    midnight was crossed. A silence longer than a day is under-counted, which
+    only makes lines look more recent. A dated line or a blank line (between
+    two add-on logs) starts a new walk from ``collected_at``.
+    """
+    end = collected_at.astimezone(UTC)
     # Tolerate a few minutes of clock skew between the node and Katsuyu.
-    later = (end + _paris_offset(end)).replace(tzinfo=None) + timedelta(minutes=5)
-    day = later.date()
-    oldest: datetime | None = None
-    for raw in reversed(lines):
-        match = _TIME_ONLY.match(raw.decode("utf-8", errors="replace"))
+    anchor = (end + _paris_offset(end)).replace(tzinfo=None) + _CLOCK_JITTER
+    later, walking = anchor, False
+    times: dict[int, datetime] = {}
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
+        if not line.strip() or _parse_log_timestamp(line) is not None:
+            later, walking = anchor, False
+            continue
+        match = _TIME_ONLY.match(line)
         if match is None:
             continue
-        hour, minute, second = (int(match.group(index)) for index in (1, 2, 3))
+        hour, minute, second = (int(match.group(group)) for group in (1, 2, 3))
         if hour > 23 or minute > 59 or second > 59:
             continue
-        candidate = datetime.combine(day, later.time()).replace(
+        candidate = later.replace(
             hour=hour, minute=minute, second=second, microsecond=0
         )
-        if candidate > later:
-            day -= timedelta(days=1)
+        if candidate > later + (_CLOCK_JITTER if walking else timedelta()):
             candidate -= timedelta(days=1)
-        later = candidate
-        oldest = candidate
-    return _paris_wall_clock_to_utc(oldest) if oldest is not None else None
-
-
-def _line_time(line: str, window_ended_at: datetime) -> datetime | None:
-    """Date a log line, inferring the day of clock-only add-on lines."""
-    occurred_at = _parse_log_timestamp(line)
-    if occurred_at is not None:
-        return occurred_at
-    match = _TIME_ONLY.match(line)
-    if match is None:
-        return None
-    hour, minute, second = (int(match.group(index)) for index in (1, 2, 3))
-    if hour > 23 or minute > 59 or second > 59:
-        return None
-    # A Paris wall-clock time on the latest day that keeps it within the
-    # analysed window's end, like zone-less full timestamps.
-    end = window_ended_at.astimezone(UTC)
-    end_wall = (end + _paris_offset(end)).replace(tzinfo=None)
-    candidate = end_wall.replace(hour=hour, minute=minute, second=second, microsecond=0)
-    if candidate > end_wall:
-        candidate -= timedelta(days=1)
-    return _paris_wall_clock_to_utc(candidate)
+        times[index] = _paris_wall_clock_to_utc(candidate)
+        # A line a few seconds out of order does not move the walk forward.
+        if candidate <= later:
+            later, walking = candidate, True
+    return times
 
 
 def _category(source: str, line: str) -> str:
@@ -485,6 +510,9 @@ def _selected_log_groups(
 class _DirectLogReader:
     def __init__(self, source_provider: LogSourceProvider) -> None:
         self.source_provider = source_provider
+        # When the last live read happened; None for inline content, which
+        # may be a past journal replayed for an earlier window.
+        self.collected_at: datetime | None = None
 
     def read(
         self,
@@ -500,7 +528,9 @@ class _DirectLogReader:
         )
         if descriptor.get("source") != source:
             raise RuntimeError("Agent returned a mismatched log source")
-        if descriptor.get("transport") == "inline":
+        inline = descriptor.get("transport") == "inline"
+        self.collected_at = None if inline else datetime.now(UTC)
+        if inline:
             content = descriptor.get("content")
             if not isinstance(content, str):
                 raise RuntimeError("Agent returned invalid inline log content")
@@ -597,8 +627,12 @@ class _DirectLogReader:
 
         truncated = False
 
-        def read_text(path: str, params: dict[str, object]) -> bytes:
+        def read_text(
+            path: str, params: dict[str, object], *, verbose: bool = False
+        ) -> bytes:
             nonlocal truncated
+            if verbose:
+                params = {**params, "verbose": 1}
             query = urlencode(params)
             request = Request(
                 f"{normalized_base_url}/api/hassio/{path.lstrip('/')}?{query}",
@@ -615,6 +649,8 @@ class _DirectLogReader:
             ) as response:
                 payload = response.read(max_bytes + 1)
             lines = payload.splitlines(keepends=True)
+            if verbose:
+                lines = [_from_verbose_journal(line) for line in lines]
             kept = lines[-10_000:]
             truncated |= len(payload) > max_bytes or (
                 len(lines) > 10_000 and not _covers_window(kept, window_started_at)
@@ -688,6 +724,9 @@ class _DirectLogReader:
                         read_text(
                             f"/addons/{quote(slug, safe='')}/logs",
                             {"lines": 10_001, "no_colors": 1},
+                            # teleinfo2mqtt prints a clock without a date;
+                            # the journal entry holds the real date.
+                            verbose=True,
                         )
                     )
             return combine(fragments)
@@ -736,6 +775,7 @@ class LogsHealthCheckHandler:
                     request.window_started_at,
                     request.window_ended_at,
                     baseline,
+                    self.reader.collected_at,
                 )
             )
         findings = [finding for result in results for finding in result.findings]
@@ -801,6 +841,7 @@ class LogsHealthCheckHandler:
         started_at: datetime,
         ended_at: datetime,
         baseline: dict[tuple[str, str], int],
+        collected_at: datetime | None = None,
     ) -> LogSourceHealth:
         grouped: Counter[str] = Counter()
         samples: dict[str, str] = {}
@@ -810,8 +851,10 @@ class LogsHealthCheckHandler:
             source, lines, started_at, ended_at
         )
         record_at: datetime | None = None
-        for index, line in enumerate(lines[:200_000]):
-            occurred_at = _line_time(line, ended_at)
+        bounded = lines[:200_000]
+        clock_times = _clock_only_times(bounded, collected_at or ended_at)
+        for index, line in enumerate(bounded):
+            occurred_at = _parse_log_timestamp(line) or clock_times.get(index)
             continuation = (
                 occurred_at is None
                 and record_at is not None

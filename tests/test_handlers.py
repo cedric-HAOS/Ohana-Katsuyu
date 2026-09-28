@@ -876,9 +876,35 @@ def test_logs_health_check_uses_supervisor_proxy_and_discovered_addon(
         ),
         (
             "http://zwave-01.ohana.lan:8123/api/hassio/addons/"
-            "a0d7b954_zwavejs2mqtt/logs?lines=10001&no_colors=1"
+            "a0d7b954_zwavejs2mqtt/logs?lines=10001&no_colors=1&verbose=1"
         ),
     ]
+
+
+def test_verbose_journal_dates_only_clock_only_addon_lines() -> None:
+    from ohana_katsuyu.handlers import _from_verbose_journal
+
+    # The journal time is UTC; teleinfo2mqtt printed the Paris clock.
+    assert _from_verbose_journal(
+        b"2026-09-27 18:41:52.203 linky-01 addon_6fc079ce_teleinfo2mqtt_ohana[91]: "
+        b"20:41:52.203  WARN teleinfo2mqtt: Unable to publish frame\n"
+    ) == (b"2026-09-27T18:41:52.203Z  WARN teleinfo2mqtt: Unable to publish frame\n")
+    # Lines with their own date or none keep the add-on's text unchanged.
+    assert (
+        _from_verbose_journal(
+            b"2026-09-27 01:45:00.000 zwave-01 addon_zwavejs[7]: "
+            b"2026-09-27T03:45:00.000+02:00 INFO BACKUP: Backup NVM started\n"
+        )
+        == b"2026-09-27T03:45:00.000+02:00 INFO BACKUP: Backup NVM started\n"
+    )
+    assert (
+        _from_verbose_journal(b"2026-09-27 18:41:52.300  addon_x:     at connect\n")
+        == b"    at connect\n"
+    )
+    # Supervisors without verbose support return the add-on line itself.
+    assert _from_verbose_journal(b"20:41:52.203  WARN teleinfo2mqtt: x\n") == (
+        b"20:41:52.203  WARN teleinfo2mqtt: x\n"
+    )
 
 
 @pytest.mark.parametrize("line_count", [9999, 10000, 10001])
@@ -1230,10 +1256,10 @@ def test_clock_only_addon_lines_are_dated_in_paris_and_windowed() -> None:
     source = _inline_health(
         "linky-01",
         [
-            "14:52:10.123 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
-            "14:52:40.456 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
             "09:00:00.000 WARN teleinfo2mqtt: unable to publish frame to "
             "ohana-agent [http://192.168.1.10:8770]",
+            "14:52:10.123 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
+            "14:52:40.456 WARN teleinfo2mqtt: mqtt connection error (read econnreset)",
         ],
         "2026-09-25T14:00:00+02:00",
         "2026-09-25T15:00:00+02:00",
@@ -1244,6 +1270,58 @@ def test_clock_only_addon_lines_are_dated_in_paris_and_windowed() -> None:
     assert finding["first_at"] == "2026-09-25T12:52:10Z"
     assert finding["last_at"] == "2026-09-25T12:52:40Z"
     assert finding["category"] == "mqtt"
+
+
+def _restart_days(days: list[str]) -> list[str]:
+    """teleinfo2mqtt refusing frames during one Agent restart a day."""
+    lines: list[str] = []
+    for _day in days:
+        lines += [
+            "20:41:52.203  WARN teleinfo2mqtt: Unable to publish frame to "
+            "Ohana-Agent [http://192.168.1.10:8770/v1/teleinformation/frames] "
+            "(connect ECONNREFUSED 192.168.1.10:8770)",
+            "20:48:11.131  INFO teleinfo2mqtt: Ohana-Agent ingestion restored "
+            "[http://192.168.1.10:8770/v1/teleinformation/frames]",
+        ]
+    return lines
+
+
+def test_clock_only_lines_from_earlier_days_stay_out_of_the_window() -> None:
+    # LINKY-01, 28 September: the Supervisor returned every line since the
+    # add-on started. Each earlier day was dated into the last 24 h, so the
+    # same refused frames were counted again every morning.
+    source = _inline_health(
+        "linky-01",
+        _restart_days(["25/09", "26/09", "27/09"]),
+        "2026-09-27T04:45:00+02:00",
+        "2026-09-28T04:45:00+02:00",
+    )
+    assert source["analyzed_lines"] == 2
+    [finding] = source["findings"]
+    assert finding["occurrences"] == 1
+    assert finding["first_at"] == "2026-09-27T18:41:52Z"
+
+
+def test_clock_only_lines_are_dated_from_the_live_collection_time() -> None:
+    from datetime import UTC, datetime
+
+    from ohana_katsuyu.handlers import _clock_only_times
+
+    lines = [
+        "23:58:00.000  WARN teleinfo2mqtt: before midnight",
+        "",  # a second add-on log starts here
+        "04:40:00.000  WARN teleinfo2mqtt: in the window",
+        "04:39:58.000  WARN teleinfo2mqtt: logged a moment out of order",
+        "04:58:00.000  INFO teleinfo2mqtt: after the window end",
+    ]
+    # Collected at 05:03 Paris for a window ending at 04:45.
+    times = _clock_only_times(lines, datetime(2026, 9, 28, 3, 3, tzinfo=UTC))
+
+    assert times[4] == datetime(2026, 9, 28, 2, 58, tzinfo=UTC)
+    assert times[3] == datetime(2026, 9, 28, 2, 39, 58, tzinfo=UTC)
+    assert times[2] == datetime(2026, 9, 28, 2, 40, tzinfo=UTC)
+    # The blank line restarts the walk: 23:58 is the evening before.
+    assert times[0] == datetime(2026, 9, 27, 21, 58, tzinfo=UTC)
 
 
 def test_linky_categories_name_the_failing_layer_not_the_addon() -> None:

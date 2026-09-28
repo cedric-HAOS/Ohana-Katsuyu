@@ -2,6 +2,17 @@
 
 ## Non publié
 
+- Lignes d'add-on sans date (teleinfo2mqtt) : Katsuyu demande au
+  Supervisor les journaux d'add-on en `verbose` et donne à une ligne qui ne
+  porte qu'une heure la date réelle de son entrée de journal. Pour un
+  Supervisor plus ancien ou un contenu fourni directement, la date est
+  reconstituée en remontant depuis la ligne la plus récente, au lieu de dater
+  chaque ligne du dernier jour avant la fin de la fenêtre. Le Supervisor
+  renvoie tout le journal depuis le démarrage de l'add-on : chaque jour passé
+  retombait dans les dernières 24 h, et LINKY-01 recomptait chaque matin
+  environ 2 760 trames refusées, en réalité refusées seulement pendant les
+  redémarrages de l'Agent.
+
 ## [0.8.18] — 2026-09-27 — Faux positifs INFO et sauvegarde NVM
 
 - Faux positifs d'INFRA-01 : les lignes INFO et DEBUG de l'Agent et de Vision
