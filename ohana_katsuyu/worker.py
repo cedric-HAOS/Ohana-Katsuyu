@@ -51,6 +51,8 @@ from ohana_katsuyu.models import (
     JobStatus,
     WorkerDocument,
     WorkerRegistration,
+    WorkerRuntime,
+    WorkerRuntimeReport,
 )
 from ohana_katsuyu.pairing import (
     canonical_worker_id,
@@ -62,6 +64,7 @@ from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.updates import refresh_update_status
 
 LOGGER = logging.getLogger(__name__)
+RUNTIME_UNSUPPORTED_RETRY_SECONDS = 3600.0
 _UNSUPPORTED_CAPABILITIES = re.compile(
     r"unsupported worker capabilities: ([a-z0-9_.]+(?:, [a-z0-9_.]+)*)"
 )
@@ -108,6 +111,22 @@ class AgentClient:
                 extra_headers=extra_headers,
             )
         )
+
+    def report_runtimes(self, payload: dict[str, Any]) -> bool:
+        """Send the runtime check; False when the Agent predates the endpoint.
+
+        Agent 1.39 answers 401 for this unknown route (administration guard).
+        """
+        try:
+            self._post("/v1/jobs/workers/runtimes", payload)
+        except RuntimeError as error:
+            if isinstance(error.__cause__, HTTPError) and error.__cause__.code in {
+                401,
+                404,
+            }:
+                return False
+            raise
+        return True
 
     def claim(self, payload: dict[str, Any]) -> JobClaimResult:
         try:
@@ -385,7 +404,13 @@ class KatsuyuWorker:
     status_store: StatusStore | None = None
     previous_worker_id: str | None = None
     shutdown_requester: Callable[[], None] | None = None
+    runtime_refresh_seconds: float = 300.0
     _shutdown_requested: bool = field(default=False, init=False, repr=False)
+    _runtime_report: dict[str, WorkerRuntime] | None = field(
+        default=None, init=False, repr=False
+    )
+    _runtime_unsupported: bool = field(default=False, init=False, repr=False)
+    _runtime_checked_at: float | None = field(default=None, init=False, repr=False)
 
     @property
     def shutdown_requested(self) -> bool:
@@ -417,7 +442,60 @@ class KatsuyuWorker:
                 current_job_type=None,
                 error=None,
             )
+        self.refresh_runtimes(force=True)
         return document
+
+    def refresh_runtimes(self, *, force: bool = False) -> None:
+        """Tell the Agent which local runtimes are usable, only when it changed.
+
+        ``force`` skips the refresh interval (after registration or a job), a
+        report identical to the last accepted one is never sent again.
+        """
+        now = monotonic()
+        # An older Agent is asked again hourly: its update needs no restart here.
+        interval = (
+            max(self.runtime_refresh_seconds, RUNTIME_UNSUPPORTED_RETRY_SECONDS)
+            if self._runtime_unsupported
+            else self.runtime_refresh_seconds
+        )
+        if (
+            (not force or self._runtime_unsupported)
+            and self._runtime_checked_at is not None
+            and now - self._runtime_checked_at < interval
+        ):
+            return
+        self._runtime_checked_at = now
+        runtimes = self._runtimes()
+        if not runtimes or runtimes == self._runtime_report:
+            return
+        report = WorkerRuntimeReport(worker_id=self.worker_id, runtimes=runtimes)
+        try:
+            accepted = self.client.report_runtimes(report.model_dump(mode="json"))
+        except RuntimeError:
+            LOGGER.warning("Unable to report Katsuyu runtimes; retrying later")
+            return
+        if not accepted:
+            if not self._runtime_unsupported:
+                LOGGER.info("Agent does not accept runtime reports yet")
+            self._runtime_unsupported = True
+            return
+        self._runtime_unsupported = False
+        self._runtime_report = runtimes
+
+    def _runtimes(self) -> dict[str, WorkerRuntime]:
+        runtimes: dict[str, WorkerRuntime] = {}
+        for job_type, handler in sorted(self.handlers.items()):
+            check = getattr(handler, "runtime_status", None)
+            if check is None:
+                continue
+            try:
+                runtimes[job_type] = check()
+            except Exception:  # noqa: BLE001 - a check never stops the worker.
+                LOGGER.exception("Runtime check failed for %s", job_type)
+                runtimes[job_type] = WorkerRuntime(
+                    state="failed", detail="contrôle du runtime impossible"
+                )
+        return runtimes
 
     def _register(self, capabilities: list[str]) -> WorkerDocument:
         request = WorkerRegistration(
@@ -447,6 +525,7 @@ class KatsuyuWorker:
         next_work = self.client.claim(claim.model_dump(mode="json"))
         job = next_work.job
         if job is None:
+            self.refresh_runtimes()
             self._publish_connected_status()
             if next_work.shutdown_requested:
                 self._request_shutdown()
@@ -508,6 +587,8 @@ class KatsuyuWorker:
             )
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
+            # The job may have verified or broken the runtime it needed.
+            self.refresh_runtimes(force=True)
 
         current = self.client.heartbeat(
             str(job.job_id),

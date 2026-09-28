@@ -2,6 +2,15 @@
 
 ## Non publié
 
+- Vitaux (Phase 5, lot 4) : Katsuyu déclare à l'Agent l'état du runtime
+  local des capacités qui en dépendent — moteur llama-server et modèle IA
+  (`unverified` tant que l'empreinte SHA-256 n'a pas été vérifiée par un job,
+  `failed` après une empreinte invalide ou un moteur qui ne démarre pas),
+  binaire `age` pour le chiffrement des sauvegardes. Envoi après
+  l'enregistrement, après chaque job et à chaque changement (contrôle toutes
+  les 5 min). Un Agent plus ancien (401/404 sur cette route) est relancé
+  toutes les heures, sans avertissement répété ni redémarrage requis.
+
 ## [0.9.0] — 2026-09-28 — Rattrapage de l'historique préventif
 
 Publiée le jour même de 0.8.20, à la demande de l'utilisateur. Le rattrapage

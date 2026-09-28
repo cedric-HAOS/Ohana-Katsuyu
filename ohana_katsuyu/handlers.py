@@ -51,7 +51,9 @@ from ohana_katsuyu.models import (
     TrendsDailyValue,
     TrendsHistoryBackfillParameters,
     TrendsHistoryBackfillResult,
+    WorkerRuntime,
 )
+from ohana_katsuyu.runtimes import executable_runtime
 
 CHUNK_SIZE = 1024 * 1024
 HANDLER_TYPES = (
@@ -1292,6 +1294,9 @@ class BackupEncryptHandler:
     workspace: KatsuyuWorkspace
     age_binary: Path = Path("age.exe")
 
+    def runtime_status(self) -> WorkerRuntime:
+        return executable_runtime(self.age_binary, "age")
+
     def execute(
         self, parameters: dict[str, Any], context: HandlerContext | None = None
     ) -> dict[str, Any]:
@@ -1390,6 +1395,9 @@ class InfraBackupHandler:
     workspace: KatsuyuWorkspace
     client: InfraBackupTransferClient
     age_binary: Path = Path("age.exe")
+
+    def runtime_status(self) -> WorkerRuntime:
+        return executable_runtime(self.age_binary, "age")
 
     def execute(
         self, parameters: dict[str, Any], context: HandlerContext | None = None

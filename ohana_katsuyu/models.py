@@ -105,6 +105,19 @@ class WorkerRegistration(ProtocolModel):
     )
 
 
+class WorkerRuntime(ProtocolModel):
+    """Local runtime one capability needs, as checked on this PC (Phase 5)."""
+
+    state: Literal["ready", "unverified", "missing", "failed"]
+    detail: str = Field(default="", max_length=300)
+
+
+class WorkerRuntimeReport(ProtocolModel):
+    protocol_version: Literal[1] = 1
+    worker_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
+    runtimes: dict[str, WorkerRuntime] = Field(max_length=32)
+
+
 class WorkerDocument(WorkerRegistration):
     registered_at: datetime
     last_seen_at: datetime
