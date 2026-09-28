@@ -2,6 +2,8 @@
 
 ## Non publié
 
+## [0.8.19] — 2026-09-28 — Lignes d'add-on sans date
+
 - Lignes d'add-on sans date (teleinfo2mqtt) : Katsuyu demande au
   Supervisor les journaux d'add-on en `verbose` et donne à une ligne qui ne
   porte qu'une heure la date réelle de son entrée de journal. Pour un
