@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import platform
+import re
 import ssl
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -61,6 +62,9 @@ from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.updates import refresh_update_status
 
 LOGGER = logging.getLogger(__name__)
+_UNSUPPORTED_CAPABILITIES = re.compile(
+    r"unsupported worker capabilities: ([a-z0-9_.]+(?:, [a-z0-9_.]+)*)"
+)
 
 
 class KatsuyuHandler(Protocol):
@@ -388,24 +392,23 @@ class KatsuyuWorker:
         return self._shutdown_requested
 
     def register(self) -> WorkerDocument:
-        request = WorkerRegistration(
-            worker_id=self.worker_id,
-            capabilities=sorted(self.handlers),
-            platform=f"{platform.system()} {platform.release()}".strip(),
-            worker_version=__version__,
-            wake_on_lan_mac_address=wake_on_lan_mac_address(
-                getattr(self.client, "base_url", "")
-            ),
-        )
-        payload = request.model_dump(mode="json")
-        if self.previous_worker_id:
-            document = self.client.register(
-                payload,
-                previous_worker_id=self.previous_worker_id,
+        try:
+            document = self._register(sorted(self.handlers))
+        except RuntimeError as error:
+            # An Agent older than this worker rejects the whole registration
+            # for one new job type: register what it knows, jobs still match.
+            match = _UNSUPPORTED_CAPABILITIES.search(str(error))
+            if match is None:
+                raise
+            unknown = {value.strip() for value in match.group(1).split(",")}
+            known = sorted(set(self.handlers) - unknown)
+            if not known or len(known) == len(self.handlers):
+                raise
+            LOGGER.warning(
+                "Agent does not know %s yet; registering without it",
+                ", ".join(sorted(unknown)),
             )
-            self.previous_worker_id = None
-        else:
-            document = self.client.register(payload)
+            document = self._register(known)
         if self.status_store is not None:
             self.status_store.write(
                 state="connected",
@@ -414,6 +417,26 @@ class KatsuyuWorker:
                 current_job_type=None,
                 error=None,
             )
+        return document
+
+    def _register(self, capabilities: list[str]) -> WorkerDocument:
+        request = WorkerRegistration(
+            worker_id=self.worker_id,
+            capabilities=capabilities,
+            platform=f"{platform.system()} {platform.release()}".strip(),
+            worker_version=__version__,
+            wake_on_lan_mac_address=wake_on_lan_mac_address(
+                getattr(self.client, "base_url", "")
+            ),
+        )
+        payload = request.model_dump(mode="json")
+        if not self.previous_worker_id:
+            return self.client.register(payload)
+        document = self.client.register(
+            payload,
+            previous_worker_id=self.previous_worker_id,
+        )
+        self.previous_worker_id = None
         return document
 
     def run_once(self) -> bool:

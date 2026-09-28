@@ -199,6 +199,56 @@ def test_worker_registers_and_claims_only_its_allowlist() -> None:
     assert client.completions[-1][1]["status"] == "SUCCEEDED"
 
 
+class OlderAgentClient(FakeClient):
+    """Agent 1.38: rejects a registration naming a job type it does not know."""
+
+    def register(self, payload: dict[str, Any]) -> WorkerDocument:
+        unknown = [c for c in payload["capabilities"] if c == "trends.history_backfill"]
+        if unknown:
+            self.registrations.append(payload)
+            raise RuntimeError(
+                "Agent rejected the worker request with HTTP 400: "
+                '{"error": "unsupported worker capabilities: '
+                + ", ".join(unknown)
+                + '"}'
+            )
+        return super().register(payload)
+
+
+def test_worker_registers_known_types_with_an_older_agent() -> None:
+    client = OlderAgentClient(None)
+    worker = KatsuyuWorker(
+        client=cast(AgentClient, client),
+        worker_id="katsuyu-bubule",
+        handlers={
+            "system.health": SuccessHandler(),
+            "trends.history_backfill": SuccessHandler(),
+        },
+    )
+
+    worker.register()
+
+    assert [r["capabilities"] for r in client.registrations] == [
+        ["system.health", "trends.history_backfill"],
+        ["system.health"],
+    ]
+
+
+def test_other_registration_errors_are_not_hidden() -> None:
+    class Refusing(FakeClient):
+        def register(self, payload: dict[str, Any]) -> WorkerDocument:
+            raise RuntimeError("Agent rejected the worker request with HTTP 401")
+
+    worker = KatsuyuWorker(
+        client=cast(AgentClient, Refusing(None)),
+        worker_id="katsuyu-bubule",
+        handlers={"system.health": SuccessHandler()},
+    )
+
+    with pytest.raises(RuntimeError, match="401"):
+        worker.register()
+
+
 def test_worker_ignores_shutdown_granted_before_completion() -> None:
     calls: list[str] = []
     client = FakeClient(
