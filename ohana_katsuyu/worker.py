@@ -37,6 +37,7 @@ from ohana_katsuyu.handlers import (
     LogsHealthCheckHandler,
     LogsInvestigateHandler,
     SystemHealthHandler,
+    TrendsHistoryBackfillHandler,
 )
 from ohana_katsuyu.models import (
     JobClaim,
@@ -269,6 +270,42 @@ class AgentClient:
             raise RuntimeError(f"Unable to read Agent log source: {error}") from error
         if not isinstance(value, dict):
             raise RuntimeError("Agent returned an invalid log source descriptor")
+        return value
+
+    def read_history_source(
+        self,
+        job_id: str,
+        worker_id: str,
+        attempt: int,
+        source_id: str,
+    ) -> dict[str, Any]:
+        """Read the job-bound Home Assistant access of one history backfill."""
+        request = Request(
+            url=(
+                f"{self.base_url.rstrip('/')}/v1/jobs/{quote(job_id, safe='')}"
+                f"/history-source/{quote(source_id, safe='')}"
+            ),
+            headers=self._transfer_headers(worker_id, attempt),
+            method="GET",
+        )
+        try:
+            with urlopen(
+                request,
+                timeout=self.timeout_seconds,
+                context=self._ssl_context(),
+            ) as response:
+                value = json.load(response)
+        except HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")[:1000]
+            raise RuntimeError(
+                f"Agent rejected history source with HTTP {error.code}: {detail}"
+            ) from error
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"Unable to read Agent history source: {error}"
+            ) from error
+        if not isinstance(value, dict):
+            raise RuntimeError("Agent returned an invalid history source descriptor")
         return value
 
     def _transfer_headers(self, worker_id: str, attempt: int) -> dict[str, str]:
@@ -666,6 +703,9 @@ def main() -> None:
         "backup.infra": InfraBackupHandler(workspace, client, arguments.age_binary),
         "logs.health_check": LogsHealthCheckHandler(client.read_log_source),
         "logs.investigate": LogsInvestigateHandler(client.read_log_source),
+        "trends.history_backfill": TrendsHistoryBackfillHandler(
+            client.read_history_source
+        ),
     }
     ai_values = (
         arguments.ai_runtime,

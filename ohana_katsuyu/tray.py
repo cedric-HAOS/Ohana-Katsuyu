@@ -26,6 +26,7 @@ JOB_LABELS = {
     "backup.infra": "sauvegarde INFRA-01",
     "logs.health_check": "contrôle des journaux",
     "logs.investigate": "analyse des journaux",
+    "trends.history_backfill": "rattrapage de l’historique",
     "ai.inference": "diagnostic IA",
 }
 

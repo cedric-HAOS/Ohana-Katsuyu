@@ -323,6 +323,52 @@ class LogsInvestigateResult(ProtocolModel):
     truncated: bool
 
 
+HistorySourceId = Literal["ha-01"]
+HistoryMetric = Literal["disk_percent"]
+
+
+class TrendsHistoryBackfillParameters(ProtocolModel):
+    """Phase 4: daily values rebuilt from Home Assistant long-term statistics."""
+
+    source: HistorySourceId
+    node_id: str = Field(min_length=1, max_length=64)
+    metric: HistoryMetric
+    unique_id: str = Field(min_length=1, max_length=120)
+    window_started_at: datetime
+    window_ended_at: datetime
+
+    @model_validator(mode="after")
+    def validate_window(self) -> Self:
+        timestamps = (self.window_started_at, self.window_ended_at)
+        if any(
+            value.tzinfo is None or value.utcoffset() is None for value in timestamps
+        ):
+            raise ValueError("history timestamps must include a timezone")
+        duration = self.window_ended_at - self.window_started_at
+        if duration.total_seconds() <= 0 or duration.days > 31:
+            raise ValueError("history window must be positive and at most 31 days")
+        return self
+
+
+class TrendsDailyValue(ProtocolModel):
+    day: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    minimum: float
+    maximum: float
+    last: float
+    hours: int = Field(ge=1, le=25)
+
+
+class TrendsHistoryBackfillResult(ProtocolModel):
+    status: Literal["OK", "NO_DATA"]
+    collected_at: datetime
+    source: HistorySourceId
+    node_id: str = Field(min_length=1, max_length=64)
+    metric: HistoryMetric
+    entity_id: str | None = Field(default=None, max_length=255)
+    rows_read: int = Field(ge=0, le=100_000)
+    days: list[TrendsDailyValue] = Field(default_factory=list, max_length=32)
+
+
 class AiInferenceEvidence(ProtocolModel):
     source: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
     content: str = Field(min_length=1, max_length=16_000)

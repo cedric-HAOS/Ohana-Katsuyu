@@ -48,6 +48,9 @@ from ohana_katsuyu.models import (
     SystemHealthIssue,
     SystemHealthParameters,
     SystemHealthResult,
+    TrendsDailyValue,
+    TrendsHistoryBackfillParameters,
+    TrendsHistoryBackfillResult,
 )
 
 CHUNK_SIZE = 1024 * 1024
@@ -59,6 +62,7 @@ HANDLER_TYPES = (
     "backup.infra",
     "logs.health_check",
     "logs.investigate",
+    "trends.history_backfill",
 )
 INFRA_REQUIRED_MEMBERS = frozenset(
     {
@@ -1546,3 +1550,170 @@ def _temporary_path(destination: Path) -> Path:
     )
     os.close(descriptor)
     return Path(value)
+
+
+HistorySourceProvider = Callable[[str, str, int, str], dict[str, Any]]
+WebSocketFactory = Callable[..., Any]
+
+
+@dataclass(slots=True)
+class TrendsHistoryBackfillHandler:
+    """Phase 4: rebuild daily values from Home Assistant hourly statistics.
+
+    The heavy part stays on this PC: the entity registry and up to 31 days
+    of hourly rows are read here, and only one compact row per Paris day
+    goes back to the Agent.
+    """
+
+    source_provider: HistorySourceProvider
+    connect: WebSocketFactory = create_connection
+
+    def execute(
+        self, parameters: dict[str, Any], context: HandlerContext | None = None
+    ) -> dict[str, Any]:
+        request = TrendsHistoryBackfillParameters.model_validate(parameters)
+        runtime = context or HandlerContext()
+        if not runtime.job_id or not runtime.worker_id or runtime.attempt < 1:
+            raise RuntimeError("history retrieval requires an owning job attempt")
+        runtime.report(5, "history.source", request.source)
+        descriptor = self.source_provider(
+            runtime.job_id, runtime.worker_id, runtime.attempt, request.source
+        )
+        if descriptor.get("source") != request.source:
+            raise RuntimeError("Agent returned a mismatched history source")
+        timeout = float(descriptor.get("timeout_seconds") or 30)
+        base_url = str(descriptor["base_url"]).rstrip("/")
+        connection = self.connect(
+            re.sub(r"^http", "ws", base_url) + "/api/websocket",
+            timeout=timeout,
+            sslopt=(
+                {}
+                if descriptor.get("verify_tls", True)
+                else {"cert_reqs": ssl.CERT_NONE}
+            ),
+        )
+        entity_id = None
+        rows: list[dict[str, Any]] = []
+        try:
+            _home_assistant_auth(connection, str(descriptor["access_token"]))
+            runtime.report(20, "history.registry")
+            entries = _home_assistant_call(
+                connection, 1, {"type": "config/entity_registry/list"}
+            )
+            entity_id = next(
+                (
+                    entry.get("entity_id")
+                    for entry in entries or []
+                    if isinstance(entry, dict)
+                    and entry.get("platform") == "mqtt"
+                    and entry.get("unique_id") == request.unique_id
+                ),
+                None,
+            )
+            if entity_id:
+                runtime.report(40, "history.statistics", entity_id)
+                statistics = _home_assistant_call(
+                    connection,
+                    2,
+                    {
+                        "type": "recorder/statistics_during_period",
+                        "start_time": request.window_started_at.isoformat(),
+                        "end_time": request.window_ended_at.isoformat(),
+                        "statistic_ids": [entity_id],
+                        "period": "hour",
+                        "types": ["min", "max", "mean"],
+                    },
+                )
+                rows = list((statistics or {}).get(entity_id, []))[:100_000]
+        finally:
+            connection.close()
+        runtime.report(80, "history.aggregate")
+        days = _daily_values(rows, request.window_started_at, request.window_ended_at)
+        result = TrendsHistoryBackfillResult(
+            status="OK" if days else "NO_DATA",
+            collected_at=datetime.now(UTC),
+            source=request.source,
+            node_id=request.node_id,
+            metric=request.metric,
+            entity_id=entity_id,
+            rows_read=len(rows),
+            days=days[-32:],
+        )
+        runtime.report(100, "history.complete")
+        return result.model_dump(mode="json")
+
+
+def _home_assistant_auth(connection: Any, token: str) -> None:
+    challenge = json.loads(connection.recv())
+    if challenge.get("type") != "auth_required":
+        raise RuntimeError("unexpected Home Assistant WebSocket challenge")
+    connection.send(json.dumps({"type": "auth", "access_token": token}))
+    if json.loads(connection.recv()).get("type") != "auth_ok":
+        raise RuntimeError("Home Assistant rejected the history access")
+
+
+def _home_assistant_call(
+    connection: Any, message_id: int, payload: dict[str, Any]
+) -> Any:
+    connection.send(json.dumps({"id": message_id, **payload}))
+    while True:
+        response = json.loads(connection.recv())
+        if response.get("id") != message_id:
+            continue
+        if not response.get("success"):
+            error = response.get("error") or {}
+            raise RuntimeError(
+                f"Home Assistant refused {payload['type']}: "
+                f"{error.get('code', 'unknown')}"
+            )
+        return response.get("result")
+
+
+def _statistic_start(value: Any) -> datetime | None:
+    # Recent Home Assistant sends epoch milliseconds, older ones ISO strings.
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value / 1000, UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _daily_values(
+    rows: list[dict[str, Any]], started: datetime, ended: datetime
+) -> list[TrendsDailyValue]:
+    dated = [
+        (start, row)
+        for row in rows
+        if isinstance(row, dict)
+        and (start := _statistic_start(row.get("start"))) is not None
+        and started <= start < ended
+    ]
+    days: dict[str, dict[str, Any]] = {}
+    for start, row in sorted(dated, key=lambda item: item[0]):
+        values = [row.get(key) for key in ("min", "max", "mean")]
+        if not all(isinstance(value, int | float) for value in values):
+            continue
+        minimum, maximum, mean = (float(value) for value in values)
+        # Paris day without a tz database (Windows): the existing offset rule.
+        day = (start + _paris_offset(start)).date().isoformat()
+        current = days.setdefault(
+            day, {"minimum": minimum, "maximum": maximum, "last": mean, "hours": 0}
+        )
+        current["minimum"] = min(current["minimum"], minimum)
+        current["maximum"] = max(current["maximum"], maximum)
+        current["last"] = mean
+        current["hours"] += 1
+    return [
+        TrendsDailyValue(
+            day=day,
+            minimum=round(value["minimum"], 2),
+            maximum=round(value["maximum"], 2),
+            last=round(value["last"], 2),
+            hours=min(value["hours"], 25),
+        )
+        for day, value in sorted(days.items())
+    ]
