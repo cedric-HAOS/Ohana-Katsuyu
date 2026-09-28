@@ -2,6 +2,8 @@
 
 ## Non publié
 
+## [0.8.20] — 2026-09-28 — Journaux lus sur toute la fenêtre
+
 - Journaux lus par le Supervisor : jusqu'à 50 000 lignes récentes au lieu de
   10 000, pour le Core comme pour les add-ons. Les lignes antérieures à la
   fenêtre (et leurs lignes de suite) sont écartées avant d'appliquer le
