@@ -2,6 +2,17 @@
 
 ## Non publié
 
+- Mise à jour automatique : le worker (`SYSTEM`) vérifie la dernière release
+  au démarrage puis toutes les 6 h ; inactif, il télécharge
+  `KatsuyuSetup.exe`, vérifie son SHA-256 contre `SHA256SUMS` de la release
+  officielle et lance `--update-existing --background` dans une tâche
+  planifiée distincte (`Ohana-Katsuyu-Update`). L'icône n'est plus arrêtée :
+  son exécutable verrouillé est renommé puis remplacé, et elle se relance
+  seule sur la nouvelle version. Pas de nouvelle tentative avant 24 h sur une
+  version en échec ; `"auto_update": false` dans `config.json` la désactive
+  (conservé par les mises à jour). Journal `logs\katsuyu-update.log`. La
+  désinstallation retire la tâche et les programmes téléchargés.
+
 ## [0.10.0] — 2026-09-28 — Runtime local déclaré à l'Agent
 
 Publiée le jour même de 0.9.0, à la demande de l'utilisateur.

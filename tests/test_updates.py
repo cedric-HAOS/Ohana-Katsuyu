@@ -81,7 +81,7 @@ def test_read_latest_release_rejects_untrusted_or_unstable_payloads(
         updates.read_latest_release()
 
 
-def test_refresh_is_cached_for_24_hours_and_preserves_worker_state(
+def test_refresh_is_cached_for_6_hours_and_preserves_worker_state(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     store = StatusStore(tmp_path / "status.json")
@@ -102,7 +102,7 @@ def test_refresh_is_cached_for_24_hours_and_preserves_worker_state(
     now = datetime(2026, 8, 20, 12, tzinfo=UTC)
 
     first = updates.refresh_update_status(store, now=now)
-    second = updates.refresh_update_status(store, now=now + timedelta(hours=23))
+    second = updates.refresh_update_status(store, now=now + timedelta(hours=5))
 
     assert first.state == "connected"
     assert first.update_state == "available"
@@ -110,6 +110,8 @@ def test_refresh_is_cached_for_24_hours_and_preserves_worker_state(
     assert second == first
     assert calls == [True]
     assert "version 0.7.0 disponible" in tooltip(first)
+    updates.refresh_update_status(store, now=now + timedelta(hours=6))
+    assert calls == [True, True]
 
 
 def test_failed_check_is_informational_and_does_not_mark_agent_as_failed(

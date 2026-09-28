@@ -20,7 +20,8 @@ LATEST_RELEASE_API = (
     "https://api.github.com/repos/cedric-HAOS/Ohana-Katsuyu/releases/latest"
 )
 RELEASE_PAGE_PREFIX = "https://github.com/cedric-HAOS/Ohana-Katsuyu/releases/tag/"
-CHECK_INTERVAL = timedelta(hours=24)
+# Checked at start and every 6 h while idle, for automatic updates.
+CHECK_INTERVAL = timedelta(hours=6)
 MAX_RESPONSE_BYTES = 64 * 1024
 VERSION_PATTERN = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 

@@ -7,7 +7,9 @@ import base64
 import io
 import os
 import subprocess
+import sys
 import webbrowser
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
@@ -15,8 +17,13 @@ from threading import Event, Thread
 import pystray
 from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 
+from ohana_katsuyu import __version__
 from ohana_katsuyu.icon_data import OFFICIAL_OHANA_ICON_BASE64
 from ohana_katsuyu.status import LocalStatus, StatusStore
+from ohana_katsuyu.updates import version_key
+
+UNINSTALL_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Ohana-Katsuyu"
+VERSION_CHECK_SECONDS = 30
 
 JOB_LABELS = {
     "system.health": "contrôle système",
@@ -82,7 +89,11 @@ def effective_state(status: LocalStatus) -> str:
 
 def tooltip(status: LocalStatus) -> str:
     state = effective_state(status)
-    if status.update_state == "available" and status.latest_version:
+    if status.update_state == "installing" and status.update_attempted_version:
+        update = f"mise à jour vers {status.update_attempted_version} en cours"
+    elif status.update_state == "failed":
+        update = "mise à jour automatique échouée"
+    elif status.update_state == "available" and status.latest_version:
         update = f"version {status.latest_version} disponible"
     elif status.update_state == "current":
         update = "à jour"
@@ -110,8 +121,38 @@ def tooltip(status: LocalStatus) -> str:
 
 
 def open_update(status: LocalStatus) -> None:
-    if status.update_state == "available" and status.update_url:
+    if status.update_state in {"available", "failed"} and status.update_url:
         webbrowser.open(status.update_url)
+
+
+def installed_version() -> str | None:
+    """Version registered by the setup (readable by every user)."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, UNINSTALL_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, "DisplayVersion")
+    except OSError:
+        return None
+    return value if isinstance(value, str) else None
+
+
+def newer_installed(read_installed: Callable[[], str | None]) -> bool:
+    """True once an automatic update installed a newer Katsuyu than this tray."""
+    installed = read_installed()
+    try:
+        return installed is not None and version_key(installed) > version_key(
+            __version__
+        )
+    except ValueError:
+        return False
+
+
+def restart_on_new_version(icon: pystray.Icon) -> None:
+    # After an update the executable path holds the new file (the running
+    # one was renamed away): start it in this same user session, then quit.
+    subprocess.Popen([sys.executable, *sys.argv[1:]], close_fds=True)  # noqa: S603
+    icon.stop()
 
 
 def open_logs(path: Path) -> None:
@@ -140,14 +181,22 @@ def run_tray(status_file: Path, log_file: Path) -> None:
             pystray.MenuItem(
                 "Ouvrir la mise à jour",
                 lambda _icon, _item: open_update(store.read()),
-                visible=lambda _item: store.read().update_state == "available",
+                visible=lambda _item: (
+                    store.read().update_state in {"available", "failed"}
+                ),
             ),
         ),
     )
 
     def refresh() -> None:
         frame = 0
+        checks_every = int(VERSION_CHECK_SECONDS / 0.4)
         while not stopped.wait(0.4):
+            if frame % checks_every == checks_every - 1 and newer_installed(
+                installed_version
+            ):
+                restart_on_new_version(icon)
+                return
             status = store.read()
             state = effective_state(status)
             images = variants[state]

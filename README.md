@@ -121,17 +121,35 @@ manuellement dans la configuration d'Agent.
 
 ## Mise à jour
 
-Après son enregistrement auprès d'Agent, le worker consulte au maximum une fois
-par 24 heures la dernière release stable du dépôt GitHub officiel
-`cedric-HAOS/Ohana-Katsuyu`. Le contrôle utilise un timeout court, ne télécharge
-aucun exécutable et ne bloque jamais les jobs en cas d'indisponibilité.
+Depuis la version 0.11.0, Katsuyu **se met à jour seul**. Le worker, qui
+tourne sous `SYSTEM`, consulte la dernière release stable du dépôt officiel
+`cedric-HAOS/Ohana-Katsuyu` à son démarrage puis toutes les 6 heures (timeout
+court, sans jamais bloquer un job). Quand une version plus récente existe et
+que Katsuyu est **inactif** (aucun job, aucune extinction demandée par Ohana) :
 
-Le résultat borné est conservé dans `status.json`. L'infobulle indique si la
-version est à jour, si une mise à jour est disponible ou si le contrôle est
-impossible. Dans le deuxième cas, le menu peut ouvrir la page officielle de la
-release. Le téléchargement et l'installation restent explicitement déclenchés
-par l'utilisateur : aucune mise à jour silencieuse n'est exécutée sous
-`SYSTEM`.
+1. il télécharge `KatsuyuSetup.exe` et `SHA256SUMS` de cette release,
+   uniquement depuis les adresses officielles du dépôt, et garde le programme
+   seulement si son empreinte SHA-256 correspond ;
+2. il lance `KatsuyuSetup.exe --update-existing --background` dans une tâche
+   planifiée distincte (`Ohana-Katsuyu-Update`, `SYSTEM`) : le programme
+   d'installation arrête le worker, il ne peut donc pas être son enfant ;
+3. le programme met à jour sans fenêtre ni nouvel appairage, avec retour à
+   l'ancienne version en cas d'échec, puis relance le worker. Journal :
+   `C:\ProgramData\Ohana\Katsuyu\logs\katsuyu-update.log` ;
+4. l'icône n'est pas arrêtée : son exécutable, verrouillé, est renommé puis
+   remplacé, et l'icône se relance d'elle-même sur la nouvelle version dans la
+   session de l'utilisateur (contrôle toutes les 30 secondes).
+
+Une tentative échouée n'est pas renouvelée pour la même version avant
+24 heures. L'infobulle indique l'état (« à jour », « mise à jour vers X en
+cours », « mise à jour automatique échouée ») ; en cas d'échec, le menu
+« Ouvrir la mise à jour » ouvre la page de la release pour une installation
+manuelle.
+
+Pour désactiver la mise à jour automatique, ajouter `"auto_update": false` à
+`C:\ProgramData\Ohana\Katsuyu\config.json` puis redémarrer le worker ; ce
+choix est conservé par les mises à jour. Les versions antérieures à 0.11.0 ne
+se mettent pas à jour seules : installer 0.11.0 une fois à la main.
 
 ## Icône près de l’horloge
 

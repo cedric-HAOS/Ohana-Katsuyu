@@ -225,7 +225,9 @@ def test_upgrade_does_not_pair_again_and_preserves_status(
         "wake_on_lan_mac_address",
         lambda _base_url: "AA:BB:CC:DD:EE:FF",
     )
-    monkeypatch.setattr(setup, "stop_running_components", lambda: stopped.append(True))
+    monkeypatch.setattr(
+        setup, "stop_running_components", lambda **_: stopped.append(True)
+    )
     monkeypatch.setattr(setup, "install_windows_startup", lambda _args: None)
     monkeypatch.setattr(setup, "register_uninstaller", lambda _path: None)
     monkeypatch.setattr(setup, "_run_checked", lambda _command: None)
@@ -303,7 +305,7 @@ def test_upgrade_can_provision_and_advertise_optional_ai(
         "wake_on_lan_mac_address",
         lambda _base_url: "AA:BB:CC:DD:EE:FF",
     )
-    monkeypatch.setattr(setup, "stop_running_components", lambda: None)
+    monkeypatch.setattr(setup, "stop_running_components", lambda **_: None)
     monkeypatch.setattr(setup, "install_windows_startup", lambda _args: None)
     monkeypatch.setattr(setup, "register_uninstaller", lambda _path: None)
     monkeypatch.setattr(setup, "_run_checked", lambda _command: None)

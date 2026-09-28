@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import ssl
+import sys
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -60,6 +61,7 @@ from ohana_katsuyu.pairing import (
     wake_on_lan_mac_address,
 )
 from ohana_katsuyu.power import request_system_shutdown
+from ohana_katsuyu.self_update import AutoUpdater, remove_update_leftovers
 from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.updates import refresh_update_status
 
@@ -405,6 +407,7 @@ class KatsuyuWorker:
     previous_worker_id: str | None = None
     shutdown_requester: Callable[[], None] | None = None
     runtime_refresh_seconds: float = 300.0
+    updater: AutoUpdater | None = None
     _shutdown_requested: bool = field(default=False, init=False, repr=False)
     _runtime_report: dict[str, WorkerRuntime] | None = field(
         default=None, init=False, repr=False
@@ -529,6 +532,10 @@ class KatsuyuWorker:
             self._publish_connected_status()
             if next_work.shutdown_requested:
                 self._request_shutdown()
+                return False
+            # Idle and staying on: the only safe moment to replace Katsuyu.
+            if self.updater is not None and self.updater.maybe_update():
+                LOGGER.info("Katsuyu update started; the setup will restart it")
             return False
         self._publish_running_status(job)
         handler = self.handlers.get(job.type)
@@ -701,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ai-model-sha256")
     parser.add_argument("--ai-context-size", type=int, default=32768)
     parser.add_argument("--worker-id", default=default_worker_id())
-    parser.set_defaults(previous_worker_id=None)
+    parser.set_defaults(previous_worker_id=None, auto_update=True)
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--heartbeat-seconds", type=float, default=5.0)
     parser.add_argument("--once", action="store_true")
@@ -755,6 +762,10 @@ def apply_configuration(arguments: argparse.Namespace) -> None:
             if not isinstance(value, str) or not value.strip():
                 raise SystemExit(f"Worker configuration field {field_name} is invalid")
             setattr(arguments, field_name, value.strip())
+    if "auto_update" in document:
+        if not isinstance(document["auto_update"], bool):
+            raise SystemExit("Worker configuration field auto_update is invalid")
+        arguments.auto_update = document["auto_update"]
     if "ai_context_size" in document:
         value = document["ai_context_size"]
         if not isinstance(value, int):
@@ -850,6 +861,15 @@ def main() -> None:
             if arguments.once:
                 raise
             sleep(arguments.poll_seconds)
+    updates_directory = arguments.status_file.parent / "updates"
+    remove_update_leftovers(
+        updates_directory,
+        Path(sys.executable).parent if getattr(sys, "frozen", False) else None,
+    )
+    worker.updater = AutoUpdater(
+        worker.status_store, updates_directory, enabled=arguments.auto_update
+    )
+    worker.updater.settle_previous_attempt()
     refresh_update_status(worker.status_store)
     LOGGER.info("Katsuyu %s started with %s", worker.worker_id, sorted(worker.handlers))
     while True:

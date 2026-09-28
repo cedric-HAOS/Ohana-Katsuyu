@@ -35,6 +35,7 @@ from ohana_katsuyu.pairing import (
     normalize_agent_url,
     wake_on_lan_mac_address,
 )
+from ohana_katsuyu.self_update import UPDATE_TASK_NAME
 from ohana_katsuyu.updates import version_key
 from ohana_katsuyu.windows import build_parser as build_windows_parser
 from ohana_katsuyu.windows import install as install_windows_startup
@@ -231,13 +232,15 @@ def read_existing_installation() -> ExistingInstallation | None:
     return ExistingInstallation(normalized_url, worker_id, token, ca_file, ai)
 
 
-def stop_running_components() -> None:
-    for command in (
+def stop_running_components(*, keep_tray: bool = False) -> None:
+    commands = [
         ["schtasks.exe", "/End", "/TN", "Ohana-Katsuyu"],
         ["taskkill.exe", "/F", "/IM", "KatsuyuWorker.exe"],
-        ["taskkill.exe", "/F", "/IM", "KatsuyuTray.exe"],
         ["taskkill.exe", "/F", "/IM", "KatsuyuAiServer.exe"],
-    ):
+    ]
+    if not keep_tray:
+        commands.append(["taskkill.exe", "/F", "/IM", "KatsuyuTray.exe"])
+    for command in commands:
         subprocess.run(  # noqa: S603
             command,
             check=False,
@@ -268,7 +271,7 @@ def replace_payload(
             shutil.copy2(destination, backup_root / destination.name)
     try:
         for name in required:
-            shutil.copy2(source / name, binary_root / name)
+            replace_file(source / name, binary_root / name)
         shutil.copy2(Path(sys.executable), uninstaller)
     except Exception:  # noqa: BLE001
         for destination in destinations:
@@ -277,6 +280,21 @@ def replace_payload(
             shutil.copy2(backup, binary_root / backup.name)
         raise
     return backup_root
+
+
+def replace_file(source: Path, destination: Path) -> None:
+    """Copy over ``destination``; a running executable is renamed out of the way.
+
+    Windows refuses to overwrite a running .exe (the user's tray during an
+    automatic update) but lets it be renamed; the tray then restarts itself
+    on the new file and the worker removes the ``.old-*`` leftover later.
+    """
+    try:
+        shutil.copy2(source, destination)
+    except PermissionError:
+        retired = destination.with_name(f"{destination.name}.old-{os.getpid()}")
+        destination.replace(retired)
+        shutil.copy2(source, destination)
 
 
 def restore_payload(
@@ -299,6 +317,7 @@ def install(
     on_code: Callable[[str, str], None] | None = None,
     *,
     install_ai: bool = False,
+    background: bool = False,
     on_progress: Callable[[str, int, int], None] | None = None,
 ) -> None:
     require_administrator()
@@ -391,6 +410,13 @@ def install(
                 "ai_context_size": ai.context_size,
             }
         )
+    if previous_config is not None:
+        try:
+            previous_auto_update = json.loads(previous_config).get("auto_update")
+        except (ValueError, AttributeError):
+            previous_auto_update = None
+        if isinstance(previous_auto_update, bool):
+            configuration["auto_update"] = previous_auto_update
     config_file.write_text(
         json.dumps(configuration, separators=(",", ":")), encoding="utf-8"
     )
@@ -431,7 +457,7 @@ def install(
             config_file.write_bytes(previous_config)
         raise
     if existing is not None:
-        stop_running_components()
+        stop_running_components(keep_tray=background)
     backup_root = replace_payload(source, binary_root, state_root, required)
     uninstaller = binary_root / "KatsuyuUninstall.exe"
     startup = build_windows_parser().parse_args(
@@ -465,9 +491,12 @@ def install(
         install_windows_startup(startup)
         register_uninstaller(uninstaller)
         _run_checked(["schtasks.exe", "/Run", "/TN", "Ohana-Katsuyu"])
-        subprocess.Popen(  # noqa: S603
-            [str(binary_root / "KatsuyuTray.exe")], close_fds=True
-        )
+        # In background (SYSTEM) the tray would start in session 0, invisible:
+        # the running tray restarts itself on the new version instead.
+        if not background:
+            subprocess.Popen(  # noqa: S603
+                [str(binary_root / "KatsuyuTray.exe")], close_fds=True
+            )
     except Exception:  # noqa: BLE001
         restore_payload(backup_root, binary_root, required)
         if existing is not None:
@@ -477,9 +506,10 @@ def install(
                 capture_output=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
             )
-            subprocess.Popen(  # noqa: S603
-                [str(binary_root / "KatsuyuTray.exe")], close_fds=True
-            )
+            if not background:
+                subprocess.Popen(  # noqa: S603
+                    [str(binary_root / "KatsuyuTray.exe")], close_fds=True
+                )
         raise
     else:
         shutil.rmtree(backup_root)
@@ -517,6 +547,16 @@ def uninstall() -> str:
             child.unlink(missing_ok=True)
     for name in ("katsuyu.token", "agent-ca.pem", "config.json", "status.json"):
         (data_root() / name).unlink(missing_ok=True)
+    # Automatic updates: the one-shot task and any staged setup.
+    subprocess.run(  # noqa: S603
+        ["schtasks.exe", "/Delete", "/F", "/TN", UPDATE_TASK_NAME],
+        check=False,
+        capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
+    )
+    updates_root = (data_root() / "updates").resolve()
+    if updates_root.exists() and updates_root.is_relative_to(data_root().resolve()):
+        shutil.rmtree(updates_root, ignore_errors=True)
     ai_root = (data_root() / "ai").resolve()
     if ai_root.exists():
         if not ai_root.is_relative_to(data_root().resolve()):
@@ -640,12 +680,53 @@ class InstallerWindow:
         self.root.mainloop()
 
 
+def update_in_background() -> None:
+    """Automatic update: same upgrade as --update-existing, logged to a file."""
+    import logging
+
+    log_file = data_root() / "logs" / "katsuyu-update.log"
+    log_format = "%(asctime)s %(levelname)s %(message)s"
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(filename=log_file, level=logging.INFO, format=log_format)
+    except OSError:
+        # Not SYSTEM/administrator: still report on stderr, then fail below.
+        logging.basicConfig(level=logging.INFO, format=log_format)
+    logger = logging.getLogger("ohana_katsuyu.setup")
+    logger.info("Automatic update to Katsuyu %s started", __version__)
+    try:
+        require_administrator()
+        existing = read_existing_installation()
+        if (
+            existing is None
+            or not existing.base_url.lower().startswith("https://")
+            or existing.ca_file is None
+            or not existing.ca_file.is_file()
+        ):
+            raise RuntimeError("no paired installation to update")
+        install(existing.base_url, background=True)
+    except Exception:
+        logger.exception("Automatic update to Katsuyu %s failed", __version__)
+        raise SystemExit(1) from None
+    logger.info("Automatic update to Katsuyu %s completed", __version__)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ohana Katsuyu Setup")
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument("--uninstall", action="store_true")
     actions.add_argument("--update-existing", action="store_true")
+    parser.add_argument(
+        "--background",
+        action="store_true",
+        help="automatic update started by the worker: no window, keep the tray",
+    )
     arguments = parser.parse_args()
+    if arguments.background and not arguments.update_existing:
+        parser.error("--background requires --update-existing")
+    if arguments.background:
+        update_in_background()
+        return
     if arguments.update_existing:
         require_administrator()
         existing = read_existing_installation()

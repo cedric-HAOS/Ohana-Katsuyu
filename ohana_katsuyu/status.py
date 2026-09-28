@@ -24,6 +24,10 @@ class LocalStatus:
     latest_version: str | None = None
     update_checked_at: str | None = None
     update_url: str | None = None
+    # Automatic update: last error and last attempt (version, UTC ISO time).
+    update_error: str | None = None
+    update_attempted_version: str | None = None
+    update_attempted_at: str | None = None
 
 
 class StatusStore:
