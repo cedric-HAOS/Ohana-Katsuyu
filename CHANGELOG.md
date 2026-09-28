@@ -2,6 +2,12 @@
 
 ## Non publié
 
+## [0.11.0] — 2026-09-28 — Mise à jour automatique
+
+Publiée le jour même de 0.10.0, à la demande de l'utilisateur.
+Première version qui se met à jour seule : l'installer une fois à la main
+(les versions précédentes ne font que signaler la nouveauté).
+
 - Mise à jour automatique : le worker (`SYSTEM`) vérifie la dernière release
   au démarrage puis toutes les 6 h ; inactif, il télécharge
   `KatsuyuSetup.exe`, vérifie son SHA-256 contre `SHA256SUMS` de la release
