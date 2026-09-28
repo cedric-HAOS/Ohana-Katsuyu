@@ -2,6 +2,25 @@
 
 ## Non publié
 
+## [0.9.0] — 2026-09-28 — Rattrapage de l'historique préventif
+
+Publiée le jour même de 0.8.20, à la demande de l'utilisateur. Le rattrapage
+demande Ohana-Agent 1.39.0 ; avec un Agent plus ancien, Katsuyu continue sans
+ce type de travail.
+
+- Nouveau travail `trends.history_backfill` (Phase 4) : avec l'accès à HA-01
+  fourni par l'Agent pour ce seul travail, Katsuyu retrouve le capteur MQTT
+  `ohana_host_disk_usage` dans le registre des entités, lit jusqu'à 31 jours
+  de statistiques horaires à long terme et renvoie une ligne par jour de
+  Paris (minimum, maximum, dernière moyenne, heures). Les lignes horaires
+  restent sur le PC. Un capteur introuvable donne `NO_DATA` ; un jeton refusé
+  fait échouer le travail. L'icône l'affiche comme « rattrapage de
+  l'historique ».
+- Enregistrement : un Agent refuse tout l'enregistrement d'un worker qui
+  déclare un type de travail inconnu. Katsuyu se réenregistre désormais sans
+  les types que l'Agent nomme, au lieu de ne plus rien traiter quand il est
+  mis à jour avant l'Agent.
+
 ## [0.8.20] — 2026-09-28 — Journaux lus sur toute la fenêtre
 
 - Journaux lus par le Supervisor : jusqu'à 50 000 lignes récentes au lieu de
