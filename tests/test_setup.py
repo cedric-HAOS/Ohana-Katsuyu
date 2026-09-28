@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from ohana_katsuyu import setup
+from ohana_katsuyu import __version__, setup
 from ohana_katsuyu.ai_install import AiInstallation
 
 
@@ -157,7 +157,10 @@ def test_installer_refuses_to_downgrade_existing_katsuyu(
     monkeypatch: Any,
 ) -> None:
     monkeypatch.setattr(setup, "require_administrator", lambda: None)
-    monkeypatch.setattr(setup, "installed_version", lambda: "0.9.0")
+    # Always newer than this build: a fixed number stopped being a downgrade
+    # at 0.9.0 and the test went on to pair with the real INFRA-01.
+    major, minor, _patch = (int(part) for part in __version__.split("."))
+    monkeypatch.setattr(setup, "installed_version", lambda: f"{major}.{minor + 1}.0")
 
     with pytest.raises(RuntimeError, match="plus récente"):
         setup.install("infra-01.ohana.lan")
