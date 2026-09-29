@@ -2,6 +2,10 @@
 
 ## Non publié
 
+## [0.12.0] — 2026-09-29 — Journaux volumineux et détail de l'hôte
+
+Publiée le jour même de 0.11.0, à la demande de l'utilisateur.
+
 - ZWAVE-01 encore déclaré tronqué le 29 septembre, cette fois par les octets :
   45 000 lignes remplissaient le budget de 4 Mio avant la fenêtre de 24 h.
   Les journaux du Supervisor sont lus jusqu'à 16 fois `max_bytes_per_source`
