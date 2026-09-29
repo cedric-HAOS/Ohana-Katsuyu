@@ -2,6 +2,10 @@
 
 ## Non publié
 
+## [0.13.0] — 2026-09-29 — Pas d'arrêt d'un PC avec une session ouverte
+
+Publiée le jour même de 0.12.1, à la demande de l'utilisateur.
+
 - Arrêt automatique : Katsuyu n'éteint plus un PC sur lequel une session
   Windows est ouverte (console ou bureau à distance, écran verrouillé compris ;
   l'écran de connexion ne compte pas). Avant `shutdown /s`, il interroge les
