@@ -957,7 +957,8 @@ def main() -> None:
         worker.status_store, updates_directory, enabled=arguments.auto_update
     )
     worker.updater.settle_previous_attempt()
-    refresh_update_status(worker.status_store)
+    worker.status_store.remove_stale_temporaries()
+    refresh_update_status(worker.status_store, force=True)
     LOGGER.info("Katsuyu %s started with %s", worker.worker_id, sorted(worker.handlers))
     while True:
         try:

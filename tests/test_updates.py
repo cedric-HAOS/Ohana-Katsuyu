@@ -138,3 +138,32 @@ def test_version_comparison_rejects_non_stable_tags() -> None:
     assert updates.version_key("v1.2.3") == (1, 2, 3)
     with pytest.raises(ValueError):
         updates.version_key("1.2.3-rc1")
+
+
+def test_worker_start_ignores_the_check_interval(tmp_path, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    from ohana_katsuyu import updates
+    from ohana_katsuyu.status import StatusStore
+
+    store = StatusStore(tmp_path / "status.json")
+    now = datetime(2026, 9, 29, 10, 30, tzinfo=UTC)
+    store.write(
+        state="connected",
+        update_state="current",
+        latest_version="0.10.0",
+        update_checked_at=now.isoformat(),
+    )
+    monkeypatch.setattr(
+        updates,
+        "read_latest_release",
+        lambda **_: updates.StableRelease(
+            version="99.0.0",
+            url=f"{updates.RELEASE_PAGE_PREFIX}v99.0.0",
+        ),
+    )
+
+    assert updates.refresh_update_status(store, now=now).update_state == "current"
+    forced = updates.refresh_update_status(store, now=now, force=True)
+    assert forced.update_state == "available"
+    assert forced.latest_version == "99.0.0"

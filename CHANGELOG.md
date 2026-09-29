@@ -2,6 +2,14 @@
 
 ## Non publié
 
+- Mise à jour automatique : le démarrage du worker vérifie la dernière release
+  sans attendre la fin de l'intervalle de 6 h (redémarrer le PC suffit à
+  trouver une release publiée depuis la dernière vérification) ; les
+  vérifications suivantes restent espacées de 6 h.
+- Fichier d'état : un remplacement refusé par Windows (fichier lu par l'icône
+  au même instant) est réessayé et ne laisse plus de `status.json.*.tmp` ; les
+  restes existants sont supprimés au démarrage.
+
 ## [0.12.0] — 2026-09-29 — Journaux volumineux et détail de l'hôte
 
 Publiée le jour même de 0.11.0, à la demande de l'utilisateur.

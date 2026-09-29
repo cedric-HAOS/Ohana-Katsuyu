@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,10 @@ class LocalStatus:
     update_attempted_at: str | None = None
 
 
+REPLACE_ATTEMPTS = 5
+REPLACE_PAUSE_SECONDS = 0.1
+
+
 class StatusStore:
     """Atomically publish a tiny document; never expose credentials or payloads."""
 
@@ -46,12 +51,34 @@ class StatusStore:
         status = LocalStatus(**values)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(f"{self.path.suffix}.{os.getpid()}.tmp")
-        temporary.write_text(
-            json.dumps(asdict(status), ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        temporary.replace(self.path)
+        try:
+            temporary.write_text(
+                json.dumps(asdict(status), ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            # Windows refuses the replace while the tray reads the file.
+            for attempt in range(REPLACE_ATTEMPTS):
+                try:
+                    temporary.replace(self.path)
+                    break
+                except PermissionError:
+                    if attempt == REPLACE_ATTEMPTS - 1:
+                        raise
+                    time.sleep(REPLACE_PAUSE_SECONDS)
+        finally:
+            temporary.unlink(missing_ok=True)
         return status
+
+    def remove_stale_temporaries(self) -> int:
+        """Delete leftovers of writes interrupted before this fix."""
+        removed = 0
+        for path in self.path.parent.glob(f"{self.path.name}.*.tmp"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        return removed
 
     def read(self) -> LocalStatus:
         try:

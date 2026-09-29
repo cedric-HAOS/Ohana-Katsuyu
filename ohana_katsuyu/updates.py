@@ -104,11 +104,16 @@ def refresh_update_status(
     *,
     now: datetime | None = None,
     timeout_seconds: float = 5.0,
+    force: bool = False,
 ) -> LocalStatus:
-    """Refresh the cached update status at most once per interval."""
+    """Refresh the cached update status at most once per interval.
+
+    ``force`` (worker start) ignores the interval: restarting the PC must be
+    enough to find a release published since the last check.
+    """
     checked_at = now or datetime.now(UTC)
     previous = store.read()
-    if not check_is_due(previous, now=checked_at):
+    if not force and not check_is_due(previous, now=checked_at):
         return previous
     try:
         release = read_latest_release(timeout_seconds=timeout_seconds)
