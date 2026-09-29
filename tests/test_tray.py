@@ -6,7 +6,12 @@ from datetime import UTC, datetime, timedelta
 
 from ohana_katsuyu.icon_data import OFFICIAL_OHANA_ICON_BASE64
 from ohana_katsuyu.status import LocalStatus
-from ohana_katsuyu.tray import effective_state, icon_variants, tooltip
+from ohana_katsuyu.tray import (
+    effective_state,
+    icon_variants,
+    restart_on_new_version,
+    tooltip,
+)
 
 
 def test_embedded_icon_is_the_official_ohana_favicon() -> None:
@@ -65,3 +70,27 @@ def test_stale_tooltip_does_not_claim_a_current_connection() -> None:
 
     assert effective_state(status) == "stopped"
     assert tooltip(status) == f"Katsuyu {status.version} · à jour · état inconnu"
+
+
+def test_restart_on_a_new_version_does_not_share_the_temporary_directory(
+    monkeypatch,
+) -> None:
+    # 29 September: the new tray started from the old one-file executable
+    # reused its temporary directory, deleted on exit: no icon, DLL error.
+    started: list[dict] = []
+    monkeypatch.setattr(
+        "ohana_katsuyu.tray.subprocess.Popen",
+        lambda command, **options: started.append({"command": command, **options}),
+    )
+
+    class Icon:
+        stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    icon = Icon()
+    restart_on_new_version(icon)
+
+    assert icon.stopped
+    assert started[0]["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"

@@ -151,7 +151,14 @@ def newer_installed(read_installed: Callable[[], str | None]) -> bool:
 def restart_on_new_version(icon: pystray.Icon) -> None:
     # After an update the executable path holds the new file (the running
     # one was renamed away): start it in this same user session, then quit.
-    subprocess.Popen([sys.executable, *sys.argv[1:]], close_fds=True)  # noqa: S603
+    # The tray is a PyInstaller one-file executable: without this variable the
+    # new process reuses this one's temporary directory, deleted when this one
+    # quits, and fails to load its Python DLL (tray lost after the 0.11.0 to
+    # 0.12.1 automatic update, 29 September).
+    environment = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    subprocess.Popen(  # noqa: S603
+        [sys.executable, *sys.argv[1:]], close_fds=True, env=environment
+    )
     icon.stop()
 
 

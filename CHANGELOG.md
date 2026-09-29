@@ -2,6 +2,13 @@
 
 ## Non publié
 
+- Zone de notification : après une mise à jour automatique, l'ancienne icône se
+  relançait sur le nouvel exécutable sans `PYINSTALLER_RESET_ENVIRONMENT` : le
+  nouveau processus réutilisait le dossier temporaire de l'ancien, supprimé à
+  sa fermeture, et échouait à charger sa DLL Python (erreur et icône perdue
+  après 0.11.0 → 0.12.1, le 29 septembre). Le correctif sert à partir de la
+  mise à jour suivante ; l'icône se relance à la main d'ici là.
+
 ## [0.12.1] — 2026-09-29 — Tracebacks chaînés et identifiants d'appareils
 
 Publiée le jour même de 0.12.0, à la demande de l'utilisateur.
