@@ -2,6 +2,10 @@
 
 ## Non publié
 
+## [0.13.1] — 2026-09-29 — Session rouverte par Windows : l'arrêt n'est plus bloqué
+
+Publiée le jour même de 0.13.0, à la demande de l'utilisateur.
+
 ### Corrigé
 
 - Arrêt automatique : Windows rouvre tout seul la session de l'utilisateur au
