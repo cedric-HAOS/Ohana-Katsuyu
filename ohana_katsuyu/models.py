@@ -152,6 +152,14 @@ class WorkerRuntimeReport(ProtocolModel):
     host: WorkerHost | None = None
 
 
+class WorkerPowerReport(ProtocolModel):
+    protocol_version: Literal[1] = 1
+    worker_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
+    outcome: Literal["shutdown_started", "shutdown_vetoed"]
+    reason: str | None = Field(default=None, max_length=80)
+    sessions: int | None = Field(default=None, ge=0, le=64)
+
+
 class WorkerDocument(WorkerRegistration):
     registered_at: datetime
     last_seen_at: datetime

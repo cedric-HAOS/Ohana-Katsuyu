@@ -223,6 +223,9 @@ class IdleClient:
     def claim(self, _payload: dict[str, Any]) -> JobClaimResult:
         return JobClaimResult(job=None, shutdown_requested=self.shutdown)
 
+    def report_power(self, _payload: dict[str, Any]) -> bool:
+        return True
+
 
 class CountingUpdater:
     def __init__(self) -> None:

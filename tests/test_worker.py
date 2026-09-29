@@ -23,6 +23,7 @@ from ohana_katsuyu.models import (
     JobStatus,
     WorkerDocument,
 )
+from ohana_katsuyu.power import ShutdownVeto
 from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.worker import (
     AgentClient,
@@ -130,6 +131,11 @@ class FakeClient:
         self.claims: list[dict[str, Any]] = []
         self.heartbeats: list[tuple[str, dict[str, Any]]] = []
         self.completions: list[tuple[str, dict[str, Any]]] = []
+        self.power_reports: list[dict[str, Any]] = []
+
+    def report_power(self, payload: dict[str, Any]) -> bool:
+        self.power_reports.append(payload)
+        return True
 
     def register(self, payload: dict[str, Any]) -> WorkerDocument:
         self.registrations.append(payload)
@@ -283,6 +289,96 @@ def test_worker_shuts_down_only_after_agent_settles_the_queue() -> None:
     assert worker.run_once() is False
     assert worker.shutdown_requested
     assert calls == ["shutdown"]
+
+
+def test_worker_reports_the_shutdown_it_starts() -> None:
+    class SettledClient(FakeClient):
+        def claim(self, payload: dict[str, Any]) -> JobClaimResult:
+            return JobClaimResult(shutdown_requested=True)
+
+    client = SettledClient(None)
+    worker = KatsuyuWorker(
+        client=cast(AgentClient, client),
+        worker_id="katsuyu-bubule",
+        handlers={"system.health": SuccessHandler()},
+        shutdown_requester=lambda: None,
+        shutdown_veto=lambda: None,
+    )
+
+    worker.run_once()
+
+    assert client.power_reports == [
+        {
+            "protocol_version": 1,
+            "worker_id": "katsuyu-bubule",
+            "outcome": "shutdown_started",
+        }
+    ]
+
+
+def test_worker_keeps_the_pc_on_when_someone_is_signed_in() -> None:
+    calls: list[str] = []
+
+    class SettledClient(FakeClient):
+        def claim(self, payload: dict[str, Any]) -> JobClaimResult:
+            return JobClaimResult(shutdown_requested=True)
+
+    client = SettledClient(None)
+    worker = KatsuyuWorker(
+        client=cast(AgentClient, client),
+        worker_id="katsuyu-bubule",
+        handlers={"system.health": SuccessHandler()},
+        shutdown_requester=lambda: calls.append("shutdown"),
+        shutdown_veto=lambda: ShutdownVeto("interactive_session", 1),
+    )
+
+    assert worker.run_once() is False
+
+    assert calls == []
+    # The loop goes on: the worker stays available and keeps polling.
+    assert not worker.shutdown_requested
+    assert client.power_reports == [
+        {
+            "protocol_version": 1,
+            "worker_id": "katsuyu-bubule",
+            "outcome": "shutdown_vetoed",
+            "reason": "interactive_session",
+            "sessions": 1,
+        }
+    ]
+
+
+def test_a_lost_report_never_blocks_the_shutdown() -> None:
+    calls: list[str] = []
+
+    class SettledClient(FakeClient):
+        def claim(self, payload: dict[str, Any]) -> JobClaimResult:
+            return JobClaimResult(shutdown_requested=True)
+
+        def report_power(self, payload: dict[str, Any]) -> bool:
+            raise RuntimeError("Agent unreachable")
+
+    worker = KatsuyuWorker(
+        client=cast(AgentClient, SettledClient(None)),
+        worker_id="katsuyu-bubule",
+        handlers={"system.health": SuccessHandler()},
+        shutdown_requester=lambda: calls.append("shutdown"),
+    )
+
+    worker.run_once()
+
+    assert calls == ["shutdown"]
+
+
+@pytest.mark.parametrize("status", [401, 404])
+def test_power_report_is_ignored_by_an_older_agent(monkeypatch, status):
+    def post(_self, _path, _payload):
+        raise RuntimeError("rejected") from HTTPError("u", status, "x", {}, None)
+
+    monkeypatch.setattr(AgentClient, "_post", post)
+    client = AgentClient(base_url="http://agent", token="t")
+
+    assert client.report_power({"worker_id": "w"}) is False
 
 
 def test_worker_keeps_local_status_fresh_when_no_job_is_available(

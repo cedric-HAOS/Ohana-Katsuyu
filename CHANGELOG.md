@@ -2,6 +2,14 @@
 
 ## Non publié
 
+- Arrêt automatique : Katsuyu n'éteint plus un PC sur lequel une session
+  Windows est ouverte (console ou bureau à distance, écran verrouillé compris ;
+  l'écran de connexion ne compte pas). Avant `shutdown /s`, il interroge les
+  sessions (`WTSEnumerateSessions`) ; si l'une est ouverte, ou si la lecture
+  échoue, le PC reste allumé, le worker continue à travailler et à répondre, et
+  l'Agent en garde la raison. Il rapporte aussi à l'Agent l'arrêt lancé
+  (`POST /v1/jobs/workers/power`, ignoré par un Agent antérieur à 1.43.0).
+
 - Zone de notification : après une mise à jour automatique, l'ancienne icône se
   relançait sur le nouvel exécutable sans `PYINSTALLER_RESET_ENVIRONMENT` : le
   nouveau processus réutilisait le dossier temporaire de l'ancien, supprimé à

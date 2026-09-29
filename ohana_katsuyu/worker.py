@@ -53,6 +53,7 @@ from ohana_katsuyu.models import (
     JobStatus,
     WorkerDocument,
     WorkerHost,
+    WorkerPowerReport,
     WorkerRegistration,
     WorkerRuntime,
     WorkerRuntimeReport,
@@ -64,7 +65,11 @@ from ohana_katsuyu.pairing import (
     default_worker_id,
     wake_on_lan_mac_address,
 )
-from ohana_katsuyu.power import request_system_shutdown
+from ohana_katsuyu.power import (
+    ShutdownVeto,
+    request_system_shutdown,
+    session_shutdown_veto,
+)
 from ohana_katsuyu.self_update import AutoUpdater, remove_update_leftovers
 from ohana_katsuyu.status import StatusStore
 from ohana_katsuyu.updates import refresh_update_status
@@ -125,6 +130,19 @@ class AgentClient:
         """
         try:
             self._post("/v1/jobs/workers/runtimes", payload)
+        except RuntimeError as error:
+            if isinstance(error.__cause__, HTTPError) and error.__cause__.code in {
+                401,
+                404,
+            }:
+                return False
+            raise
+        return True
+
+    def report_power(self, payload: dict[str, Any]) -> bool:
+        """Tell Agent what became of a granted shutdown; False on an older Agent."""
+        try:
+            self._post("/v1/jobs/workers/power", payload)
         except RuntimeError as error:
             if isinstance(error.__cause__, HTTPError) and error.__cause__.code in {
                 401,
@@ -433,6 +451,7 @@ class KatsuyuWorker:
     status_store: StatusStore | None = None
     previous_worker_id: str | None = None
     shutdown_requester: Callable[[], None] | None = None
+    shutdown_veto: Callable[[], ShutdownVeto | None] | None = None
     runtime_refresh_seconds: float = 300.0
     updater: AutoUpdater | None = None
     _shutdown_requested: bool = field(default=False, init=False, repr=False)
@@ -701,14 +720,34 @@ class KatsuyuWorker:
         return True
 
     def _request_shutdown(self) -> None:
+        veto = self.shutdown_veto() if self.shutdown_veto is not None else None
+        if veto is not None:
+            # Agent consumed its permission: the PC stays on and is reused.
+            LOGGER.info("Shutdown granted by Agent but kept off: %s", veto.reason)
+            self._report_power("shutdown_vetoed", veto)
+            return
         self._shutdown_requested = True
         if self.shutdown_requester is None:
             LOGGER.warning("Agent requested shutdown, but no shutdown handler is set")
             return
+        self._report_power("shutdown_started")
         try:
             self.shutdown_requester()
         except Exception:  # noqa: BLE001
             LOGGER.exception("Unable to request Windows shutdown after Katsuyu job")
+
+    def _report_power(self, outcome: str, veto: ShutdownVeto | None = None) -> None:
+        """Best effort: Vision explains the cycle, the cycle never depends on it."""
+        report = WorkerPowerReport(
+            worker_id=self.worker_id,
+            outcome=outcome,  # type: ignore[arg-type]
+            reason=veto.reason if veto else None,
+            sessions=veto.sessions if veto else None,
+        )
+        try:
+            self.client.report_power(report.model_dump(mode="json", exclude_none=True))
+        except RuntimeError:
+            LOGGER.warning("Unable to report the shutdown outcome to Agent")
 
     def _publish_connected_status(self) -> None:
         if self.status_store is not None:
@@ -933,6 +972,7 @@ def main() -> None:
         status_store=StatusStore(arguments.status_file),
         previous_worker_id=arguments.previous_worker_id,
         shutdown_requester=request_system_shutdown,
+        shutdown_veto=session_shutdown_veto,
         workspace_root=workspace.root,
     )
     while True:
