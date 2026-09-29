@@ -2,6 +2,19 @@
 
 ## Non publié
 
+### Corrigé
+
+- Arrêt automatique : Windows rouvre tout seul la session de l'utilisateur au
+  démarrage et la verrouille aussitôt (constaté sur Bubule le 29/09 à 18:33:30,
+  session ouverte avant tout geste). Katsuyu la comptait comme « quelqu'un est
+  connecté » et refusait l'arrêt à chaque cycle. Une session verrouillée, vue
+  verrouillée dès son ouverture et jamais vue déverrouillée depuis (au-delà des
+  10 s dont Windows a besoin pour verrouiller une ouverture automatique) ne
+  bloque plus l'arrêt. Une session déjà utilisée, déconnectée ou d'historique
+  inconnu (worker redémarré) bloque toujours : dans le doute, le PC reste
+  allumé. Un observateur échantillonne l'état de verrouillage toutes les 2 s
+  (`WTSSessionInfoEx`, `SessionFlags`).
+
 ## [0.13.0] — 2026-09-29 — Pas d'arrêt d'un PC avec une session ouverte
 
 Publiée le jour même de 0.12.1, à la demande de l'utilisateur.

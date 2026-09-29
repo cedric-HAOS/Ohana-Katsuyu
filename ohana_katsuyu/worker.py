@@ -69,6 +69,7 @@ from ohana_katsuyu.power import (
     ShutdownVeto,
     request_system_shutdown,
     session_shutdown_veto,
+    start_session_watch,
 )
 from ohana_katsuyu.self_update import AutoUpdater, remove_update_leftovers
 from ohana_katsuyu.status import StatusStore
@@ -964,6 +965,9 @@ def main() -> None:
             model_sha256=arguments.ai_model_sha256,
             context_size=arguments.ai_context_size,
         )
+    if os.name == "nt":
+        # Knows whether a session was ever used, not only that one is open.
+        start_session_watch()
     worker = KatsuyuWorker(
         client=client,
         worker_id=arguments.worker_id,
