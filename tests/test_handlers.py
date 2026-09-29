@@ -872,11 +872,11 @@ def test_logs_health_check_uses_supervisor_proxy_and_discovered_addon(
     assert requested_urls == [
         (
             "http://zwave-01.ohana.lan:8123/api/hassio/"
-            "core/logs/latest?no_colors=1&lines=50001"
+            "core/logs/latest?no_colors=1&lines=200001"
         ),
         (
             "http://zwave-01.ohana.lan:8123/api/hassio/addons/"
-            "a0d7b954_zwavejs2mqtt/logs?no_colors=1&lines=50001&verbose=1"
+            "a0d7b954_zwavejs2mqtt/logs?no_colors=1&lines=200001&verbose=1"
         ),
     ]
 
@@ -909,6 +909,7 @@ def test_verbose_journal_dates_only_clock_only_addon_lines() -> None:
 
 @pytest.mark.parametrize("line_count", [49999, 50000, 50001])
 def test_supervisor_line_cap_is_reported_even_below_byte_limit(monkeypatch, line_count):
+    monkeypatch.setattr("ohana_katsuyu.handlers._SUPERVISOR_LINES", 50_000)
     content = b"INFO normal activity\n" * line_count
 
     def response(request, **kwargs):
@@ -925,21 +926,46 @@ def test_supervisor_line_cap_is_reported_even_below_byte_limit(monkeypatch, line
     assert truncated is (line_count > 50000)
 
 
-@pytest.mark.parametrize("lines", [409, 410, 411])
+@pytest.mark.parametrize("lines", [255, 256, 257])
 def test_supervisor_byte_cap_distinguishes_exact_fit(monkeypatch, lines):
-    # 410 lines of 10 bytes fill 4,100 bytes; the newest lines are kept.
-    content = b"".join(b"INFO %04d\n" % index for index in range(lines))
+    # A 256-byte budget reads 16 times as much: 256 lines of 16 bytes.
+    content = b"".join(b"INFO %010d\n" % index for index in range(lines))
     monkeypatch.setattr(
         "ohana_katsuyu.handlers.urlopen", lambda *a, **k: io.BytesIO(content)
     )
     from ohana_katsuyu.handlers import _DirectLogReader
 
     payload, truncated = _DirectLogReader._read_supervisor(
-        "http://ha.test:8123", "private", [], 4100, 5, verify_tls=True
+        "http://ha.test:8123", "private", [], 256, 5, verify_tls=True
     )
-    assert len(payload) == min(lines, 410) * 10
-    assert payload.endswith(b"INFO %04d\n" % (lines - 1))
-    assert truncated is (lines > 410)
+    assert truncated is (lines > 256)
+    if lines <= 256:
+        assert payload == content
+
+
+def test_chatty_window_beyond_max_bytes_is_complete(monkeypatch):
+    # ZWAVE-01, 29 September: 45,000 lines filled the 4 MiB budget before the
+    # 24 h window; the day is kept whole since Katsuyu only groups lines.
+    from datetime import UTC, datetime
+
+    from ohana_katsuyu.handlers import _DirectLogReader
+
+    line = b"2026-09-28 12:00:00.000 INFO Z-Wave value updated on node 12 x\n"
+    content = line * 2_000
+    monkeypatch.setattr(
+        "ohana_katsuyu.handlers.urlopen", lambda *a, **k: io.BytesIO(content)
+    )
+    payload, truncated = _DirectLogReader._read_supervisor(
+        "http://ha.test:8123",
+        "private",
+        [],
+        len(content) // 4,
+        5,
+        verify_tls=True,
+        window_started_at=datetime(2026, 9, 28, 4, 0, tzinfo=UTC),
+    )
+    assert payload == content
+    assert truncated is False
 
 
 def test_supervisor_byte_cap_only_counts_the_window(monkeypatch):
@@ -1417,6 +1443,7 @@ def test_supervisor_line_cap_is_not_a_loss_when_the_window_is_covered(
 ):
     # LINKY-01 and ZWAVE-01 daily checks were always "truncated": the log
     # tail exceeded the line cap even when those lines spanned the whole day.
+    monkeypatch.setattr("ohana_katsuyu.handlers._SUPERVISOR_LINES", 50_000)
     content = (
         b"2026-09-24T00:00:00+00:00 INFO dropped\n"
         + (oldest_kept.encode() + b" INFO kept\n") * 50_000
@@ -1454,6 +1481,8 @@ def test_clock_only_addon_lines_can_cover_the_window(
     # teleinfo2mqtt prints "HH:MM:SS.mmmZ" through `bunyan -o short`: LINKY-01
     # was reported truncated even for a one-hour window.
     from datetime import UTC, datetime, timedelta
+
+    monkeypatch.setattr("ohana_katsuyu.handlers._SUPERVISOR_LINES", 50_000)
 
     from ohana_katsuyu.handlers import _DirectLogReader
 

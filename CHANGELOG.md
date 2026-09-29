@@ -2,6 +2,14 @@
 
 ## Non publié
 
+- ZWAVE-01 encore déclaré tronqué le 29 septembre, cette fois par les octets :
+  45 000 lignes remplissaient le budget de 4 Mio avant la fenêtre de 24 h.
+  Les journaux du Supervisor sont lus jusqu'à 16 fois `max_bytes_per_source`
+  et toute la fenêtre est gardée (Katsuyu regroupe les lignes, il ne les
+  transmet pas) ; jusqu'à 200 000 lignes par journal, la borne d'analyse
+  (50 000 auparavant). `fetched_bytes` reste plafonné à 4 Mio, limite du
+  contrat de l'Agent. Scénario `supervisor-log-window` étendu (0.11.0 échoue).
+
 ## [0.11.0] — 2026-09-28 — Mise à jour automatique
 
 Publiée le jour même de 0.10.0, à la demande de l'utilisateur.

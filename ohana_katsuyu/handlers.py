@@ -181,9 +181,15 @@ _HTTP_ACCESS = re.compile(
 )
 # Some add-ons (teleinfo2mqtt) print only a clock time, without a date.
 _TIME_ONLY = re.compile(r"^\s*\[?(\d{2}):(\d{2}):(\d{2})(?:[.,](\d{1,6}))?\b")
-# Newest lines read per Supervisor log. ZWAVE-01 logged more than 10,000 lines
-# a day, so every daily check was reported truncated.
-_SUPERVISOR_LINES = 50_000
+# Newest lines read per Supervisor log, the analysis bound. ZWAVE-01 logged
+# more than 10,000 lines a day, then filled 4 MiB (45,000 lines) before its
+# 24 h window on 29 September: every daily check was reported truncated.
+_SUPERVISOR_LINES = 200_000
+# Supervisor logs are read up to this multiple of max_bytes_per_source and
+# the whole window is kept: Katsuyu groups lines, it never forwards them.
+_SUPERVISOR_READ_FACTOR = 16
+# The Agent contract still bounds the reported size (Agent <= 1.40 rejects more).
+_REPORTED_BYTES_LIMIT = 4 * 1024 * 1024
 # Supervisor "verbose" add-on logs: zone-less UTC journal time, host,
 # identifier[pid], then the add-on's own line.
 _VERBOSE_PREFIX = re.compile(
@@ -656,6 +662,7 @@ class _DirectLogReader:
             tls_context = ssl._create_unverified_context()  # noqa: SLF001
 
         truncated = False
+        read_limit = max_bytes * _SUPERVISOR_READ_FACTOR
 
         def read_text(
             path: str, params: dict[str, object], *, verbose: bool = False
@@ -678,27 +685,26 @@ class _DirectLogReader:
                 timeout=timeout,
                 context=tls_context,
             ) as response:
-                # Lines older than the window are read, then dropped: only the
-                # window counts against max_bytes.
-                payload = response.read(max_bytes * 16 + 1)
+                # Lines older than the window are read, then dropped.
+                payload = response.read(read_limit + 1)
             lines = payload.splitlines(keepends=True)
             if verbose:
                 lines = [_from_verbose_journal(line) for line in lines]
             kept = lines[-_SUPERVISOR_LINES:]
-            truncated |= len(payload) > max_bytes * 16 or (
+            truncated |= len(payload) > read_limit or (
                 len(lines) > _SUPERVISOR_LINES
                 and not _covers_window(kept, window_started_at)
             )
             kept = _from_window_start(kept, window_started_at)
             size = sum(len(line) for line in kept)
-            while kept and size > max_bytes:
+            while kept and size > read_limit:
                 size -= len(kept.pop(0))
                 truncated = True
             return b"".join(kept)
 
         def combine(fragments):
             payload = b"\n".join(fragments)
-            return payload[:max_bytes], truncated or len(payload) > max_bytes
+            return payload[:read_limit], truncated or len(payload) > read_limit
 
         fragments = [read_text("/core/logs/latest", {"no_colors": 1})]
         patterns = (
@@ -943,7 +949,7 @@ class LogsHealthCheckHandler:
         return LogSourceHealth(
             source=source,
             status="KO" if findings else "OK",
-            fetched_bytes=fetched_bytes,
+            fetched_bytes=min(fetched_bytes, _REPORTED_BYTES_LIMIT),
             truncated=truncated or len(lines) > 200_000 or len(grouped) > 64,
             analyzed_lines=analyzed_lines,
             findings=findings,
