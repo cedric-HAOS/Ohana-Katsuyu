@@ -229,3 +229,21 @@ ne déclenche pas cet arrêt. Les délais IA restent bornés à 900 secondes.
 Avec un ancien Agent, seul un HTTP 404 provoque le retour au polling historique.
 Les tâches restent exécutables mais l’ancien indicateur d’arrêt est ignoré.
 Aucune nouvelle configuration YAML n’est nécessaire.
+
+## Arrêt et sessions Windows (0.13)
+
+Avant `shutdown /s`, Katsuyu vérifie qu’aucune session n’est utilisée ; sinon le
+PC reste allumé et le motif (`interactive_session`) est journalisé par l’Agent,
+visible dans la vue Ohana de Vision. Une session **déconnectée**, **déverrouillée**
+ou dont l’état est illisible bloque l’arrêt. Si les sessions ne peuvent pas être
+lues (`session_check_failed`), le PC reste allumé : un PC inactif coûte un peu
+d’électricité, un arrêt inattendu coûte le travail de quelqu’un.
+
+Windows peut rouvrir tout seul la session de l’utilisateur au démarrage et la
+verrouiller aussitôt. Cette session n’est pas un usage : depuis la 0.13.1, une
+session vue **verrouillée dès son ouverture** (moins de 120 s) et **jamais vue
+déverrouillée** au-delà de 10 s ne bloque plus l’arrêt. Le worker lit l’état de
+verrouillage toutes les 2 s (`WTSSessionInfoEx`). Dès qu’elle a été utilisée, la
+session bloque l’arrêt, même reverrouillée ensuite. Après un redémarrage du
+worker, une session ancienne et verrouillée est d’historique inconnu : elle
+compte comme utilisée.
