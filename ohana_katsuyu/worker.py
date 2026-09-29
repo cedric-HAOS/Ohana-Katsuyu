@@ -9,6 +9,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 import ssl
 import sys
 from collections.abc import Callable
@@ -51,9 +52,12 @@ from ohana_katsuyu.models import (
     JobProgress,
     JobStatus,
     WorkerDocument,
+    WorkerHost,
     WorkerRegistration,
     WorkerRuntime,
     WorkerRuntimeReport,
+    WorkerUpdate,
+    WorkerWorkspace,
 )
 from ohana_katsuyu.pairing import (
     canonical_worker_id,
@@ -397,6 +401,29 @@ class AgentClient:
         return value
 
 
+# Free space and workspace size move all the time: rounded to 100 MiB, they
+# only trigger a new report (one SQLite write on the SD card) when it matters.
+_BYTES_STEP = 100 * 1024 * 1024
+_WORKSPACE_WALK_LIMIT = 10_000
+
+
+def _rounded(value: int | None) -> int | None:
+    return None if value is None else value // _BYTES_STEP * _BYTES_STEP
+
+
+def _directory_bytes(root: Path) -> int | None:
+    total = 0
+    try:
+        for count, path in enumerate(root.rglob("*")):
+            if count >= _WORKSPACE_WALK_LIMIT:
+                return None
+            if path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+    except OSError:
+        return None
+    return total
+
+
 @dataclass(slots=True)
 class KatsuyuWorker:
     client: AgentClient
@@ -414,6 +441,9 @@ class KatsuyuWorker:
     )
     _runtime_unsupported: bool = field(default=False, init=False, repr=False)
     _runtime_checked_at: float | None = field(default=None, init=False, repr=False)
+    workspace_root: Path | None = None
+    _host_report: WorkerHost | None = field(default=None, init=False, repr=False)
+    _host_unsupported: bool = field(default=False, init=False, repr=False)
 
     @property
     def shutdown_requested(self) -> bool:
@@ -469,11 +499,16 @@ class KatsuyuWorker:
             return
         self._runtime_checked_at = now
         runtimes = self._runtimes()
-        if not runtimes or runtimes == self._runtime_report:
+        host = None if self._host_unsupported else self._host()
+        if not runtimes or (
+            runtimes == self._runtime_report and host == self._host_report
+        ):
             return
-        report = WorkerRuntimeReport(worker_id=self.worker_id, runtimes=runtimes)
+        report = WorkerRuntimeReport(
+            worker_id=self.worker_id, runtimes=runtimes, host=host
+        )
         try:
-            accepted = self.client.report_runtimes(report.model_dump(mode="json"))
+            accepted = self._send_runtimes(report)
         except RuntimeError:
             LOGGER.warning("Unable to report Katsuyu runtimes; retrying later")
             return
@@ -484,6 +519,57 @@ class KatsuyuWorker:
             return
         self._runtime_unsupported = False
         self._runtime_report = runtimes
+        self._host_report = None if self._host_unsupported else host
+
+    def _send_runtimes(self, report: WorkerRuntimeReport) -> bool:
+        try:
+            return self.client.report_runtimes(
+                report.model_dump(mode="json", exclude_none=True)
+            )
+        except RuntimeError as error:
+            cause = error.__cause__
+            if report.host is None or not (
+                isinstance(cause, HTTPError) and cause.code == 422
+            ):
+                raise
+            # Agent 1.40 validates the report strictly and has no host section.
+            LOGGER.info("Agent does not accept the host detail yet")
+            self._host_unsupported = True
+            legacy = report.model_copy(update={"host": None})
+            return self.client.report_runtimes(
+                legacy.model_dump(mode="json", exclude_none=True)
+            )
+
+    def _host(self) -> WorkerHost | None:
+        """Workspace, AI runtime and update detail for Vision's Ohana view."""
+        workspace = None
+        if self.workspace_root is not None:
+            try:
+                usage = shutil.disk_usage(self.workspace_root)
+                free, total = _rounded(usage.free), usage.total
+            except OSError:
+                free = total = None
+            workspace = WorkerWorkspace(
+                path=str(self.workspace_root)[:300],
+                used_bytes=_rounded(_directory_bytes(self.workspace_root)),
+                free_bytes=free,
+                total_bytes=total,
+            )
+        ai_handler = self.handlers.get("ai.inference")
+        detail = getattr(ai_handler, "host_detail", None)
+        ai = detail() if detail is not None else None
+        update = None
+        if self.status_store is not None:
+            status = self.status_store.read()
+            update = WorkerUpdate(
+                latest_version=status.latest_version,
+                automatic=self.updater.enabled if self.updater is not None else None,
+                state=status.update_state,
+                detail=status.update_error,
+            )
+        if workspace is None and ai is None and update is None:
+            return None
+        return WorkerHost(workspace=workspace, ai=ai, update=update)
 
     def _runtimes(self) -> dict[str, WorkerRuntime]:
         runtimes: dict[str, WorkerRuntime] = {}
@@ -847,6 +933,7 @@ def main() -> None:
         status_store=StatusStore(arguments.status_file),
         previous_worker_id=arguments.previous_worker_id,
         shutdown_requester=request_system_shutdown,
+        workspace_root=workspace.root,
     )
     while True:
         try:

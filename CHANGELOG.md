@@ -9,6 +9,12 @@
   transmet pas) ; jusqu'à 200 000 lignes par journal, la borne d'analyse
   (50 000 auparavant). `fetched_bytes` reste plafonné à 4 Mio, limite du
   contrat de l'Agent. Scénario `supervisor-log-window` étendu (0.11.0 échoue).
+- Rapport de runtimes enrichi (durcissement de la Phase 5) : espace de travail
+  (chemin, occupé, libre, arrondis à 100 Mio pour ne pas réécrire à chaque
+  octet), détail du runtime IA (modèle, taille, vérification, version de
+  `llama-server`, dernière analyse et sa durée, dernière erreur) et état de la
+  mise à jour. Un Agent 1.40 refuse ce champ (422) : le rapport repart sans
+  lui et n'est plus proposé.
 
 ## [0.11.0] — 2026-09-28 — Mise à jour automatique
 

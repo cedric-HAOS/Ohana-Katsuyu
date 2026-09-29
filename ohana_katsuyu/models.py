@@ -112,10 +112,44 @@ class WorkerRuntime(ProtocolModel):
     detail: str = Field(default="", max_length=300)
 
 
+class WorkerWorkspace(ProtocolModel):
+    path: str = Field(max_length=300)
+    used_bytes: int | None = Field(default=None, ge=0)
+    free_bytes: int | None = Field(default=None, ge=0)
+    total_bytes: int | None = Field(default=None, ge=0)
+
+
+class WorkerAIRuntime(ProtocolModel):
+    model: str | None = Field(default=None, max_length=200)
+    model_bytes: int | None = Field(default=None, ge=0)
+    model_verified: bool | None = None
+    runtime: str | None = Field(default=None, max_length=200)
+    last_inference_at: datetime | None = None
+    last_inference_seconds: float | None = Field(default=None, ge=0)
+    last_error: str | None = Field(default=None, max_length=300)
+
+
+class WorkerUpdate(ProtocolModel):
+    latest_version: str | None = Field(default=None, max_length=40)
+    automatic: bool | None = None
+    state: str | None = Field(default=None, max_length=40)
+    detail: str | None = Field(default=None, max_length=300)
+
+
+class WorkerHost(ProtocolModel):
+    """Phase 5 hardening: workspace, AI runtime detail and updates."""
+
+    workspace: WorkerWorkspace | None = None
+    ai: WorkerAIRuntime | None = None
+    update: WorkerUpdate | None = None
+
+
 class WorkerRuntimeReport(ProtocolModel):
     protocol_version: Literal[1] = 1
     worker_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
     runtimes: dict[str, WorkerRuntime] = Field(max_length=32)
+    # Agent 1.40 rejects this field: the worker then reports without it.
+    host: WorkerHost | None = None
 
 
 class WorkerDocument(WorkerRegistration):

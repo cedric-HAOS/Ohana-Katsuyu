@@ -206,3 +206,63 @@ def test_ai_runtime_reports_a_bad_model_digest(tmp_path: Path) -> None:
     status = handler.runtime_status()
     assert status.state == "failed"
     assert status.detail == "empreinte SHA-256 du modèle invalide"
+
+
+class StrictOlderAgent(RuntimeClient):
+    """Agent 1.40: the runtimes route exists but rejects the host section."""
+
+    def report_runtimes(self, payload: dict[str, Any]) -> bool:
+        if "host" in payload:
+            raise RuntimeError("invalid") from HTTPError("r", 422, "test", {}, None)
+        return super().report_runtimes(payload)
+
+
+def test_workspace_detail_is_reported_with_the_runtimes(tmp_path: Path) -> None:
+    (tmp_path / "job").mkdir()
+    (tmp_path / "job" / "part").write_bytes(b"x" * 10)
+    client = RuntimeClient()
+    worker = _worker(client, SwitchableRuntime())
+    worker.workspace_root = tmp_path
+    worker.register()
+
+    workspace = client.reports[0]["host"]["workspace"]
+    assert workspace["path"] == str(tmp_path)
+    # Rounded to 100 MiB so that every written byte is not a new report.
+    assert workspace["used_bytes"] == 0
+    assert workspace["free_bytes"] % (100 * 1024 * 1024) == 0
+
+
+def test_an_agent_rejecting_the_host_detail_still_gets_the_runtimes(
+    tmp_path: Path,
+) -> None:
+    client = StrictOlderAgent()
+    runtime = SwitchableRuntime()
+    worker = _worker(client, runtime)
+    worker.workspace_root = tmp_path
+    worker.register()
+    runtime.state = WorkerRuntime(state="missing")
+    worker.run_once()
+
+    assert [sorted(report) for report in client.reports] == [
+        ["protocol_version", "runtimes", "worker_id"],
+        ["protocol_version", "runtimes", "worker_id"],
+    ]
+
+
+def test_ai_host_detail_never_starts_the_model(tmp_path: Path) -> None:
+    runtime = tmp_path / "llama-server.exe"
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"gguf" * 8)
+    handler = AiInferenceHandler(
+        runtime=runtime,
+        model=model,
+        model_id="ministral-3-14b",
+        model_sha256=hashlib.sha256(b"gguf" * 8).hexdigest(),
+    )
+
+    detail = handler.host_detail()
+    assert detail.model == "ministral-3-14b"
+    assert detail.model_bytes == 32
+    assert detail.model_verified is False
+    assert detail.runtime is None
+    assert detail.last_inference_at is None

@@ -20,6 +20,7 @@ from ohana_katsuyu.handlers import HandlerContext
 from ohana_katsuyu.models import (
     AiInferenceParameters,
     AiInferenceResult,
+    WorkerAIRuntime,
     WorkerRuntime,
 )
 
@@ -176,6 +177,9 @@ class AiInferenceHandler:
     _verified: bool = field(default=False, init=False)
     # Phase 5: why the last attempt could not use the local runtime.
     _failure: str | None = field(default=None, init=False)
+    _runtime_version: str | None = field(default=None, init=False)
+    _last_inference_at: datetime | None = field(default=None, init=False)
+    _last_inference_seconds: float | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.runtime = self.runtime.resolve()
@@ -204,7 +208,56 @@ class AiInferenceHandler:
             detail=f"{self.model_id} présent, empreinte vérifiée au premier job",
         )
 
+    def host_detail(self) -> WorkerAIRuntime:
+        """Detail shown in Vision's Ohana view; never starts the model."""
+        try:
+            model_bytes = self.model.stat().st_size
+        except OSError:
+            model_bytes = None
+        return WorkerAIRuntime(
+            model=self.model_id,
+            model_bytes=model_bytes,
+            model_verified=self._verified,
+            runtime=self._runtime_label(),
+            last_inference_at=self._last_inference_at,
+            last_inference_seconds=self._last_inference_seconds,
+            last_error=self._failure,
+        )
+
+    def _runtime_label(self) -> str | None:
+        if self._runtime_version is None and self.runtime.is_file():
+            try:
+                completed = subprocess.run(  # noqa: S603
+                    [str(self.runtime), "--version"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                output = f"{completed.stdout}\n{completed.stderr}"
+                line = next(
+                    (item for item in output.splitlines() if "version" in item.lower()),
+                    "",
+                )
+                self._runtime_version = f"{self.runtime.name} {line.strip()}".strip()
+            except (OSError, subprocess.SubprocessError):
+                self._runtime_version = self.runtime.name
+        return self._runtime_version[:200] if self._runtime_version else None
+
     def execute(
+        self, parameters: dict[str, Any], context: HandlerContext | None = None
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            return self._execute(parameters, context)
+        finally:
+            self._last_inference_at = datetime.now(UTC)
+            self._last_inference_seconds = round(time.monotonic() - started, 1)
+
+    def _execute(
         self, parameters: dict[str, Any], context: HandlerContext | None = None
     ) -> dict[str, Any]:
         request = AiInferenceParameters.model_validate(parameters)
