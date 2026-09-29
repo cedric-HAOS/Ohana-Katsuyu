@@ -2,6 +2,10 @@
 
 ## Non publié
 
+## [0.12.1] — 2026-09-29 — Tracebacks chaînés et identifiants d'appareils
+
+Publiée le jour même de 0.12.0, à la demande de l'utilisateur.
+
 - Journaux : une ligne vide ne termine plus l'enregistrement en cours. Python
   sépare les exceptions chaînées par des lignes vides : « During handling of
   the above exception », « raise exception », les classes d'exception non
