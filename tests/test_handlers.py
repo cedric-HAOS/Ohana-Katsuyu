@@ -1418,6 +1418,55 @@ def test_traceback_continuation_belongs_to_its_timestamped_record() -> None:
     assert finding["last_at"] == "2026-09-25T12:40:00.123000Z"
 
 
+def test_blank_lines_inside_a_chained_traceback_do_not_end_the_record() -> None:
+    # HA-01, 29 September: Python separates chained exceptions with blank
+    # lines; the lines after the first blank one became 5 findings of their own
+    # ("traceback (most recent call last):", "the above exception was the
+    # direct cause...", "raise exception") beside the Tapo error.
+    source = _inline_health(
+        "ha-01",
+        [
+            "2026-09-25 14:40:00.123 ERROR (MainThread) [custom_components."
+            "tapo_control] Unable to connect to Tapo",
+            "Traceback (most recent call last):",
+            '  File "/usr/local/lib/urllib3/connection.py", line 174, in _new_conn',
+            "urllib3.exceptions.ConnectTimeoutError: timed out",
+            "",
+            "During handling of the above exception, another exception occurred:",
+            "",
+            "Traceback (most recent call last):",
+            "    raise exception",
+            "requests.exceptions.ConnectTimeout: HTTPSConnectionPool",
+            "",
+            "The above exception was the direct cause of the following exception:",
+        ],
+        "2026-09-25T14:00:00+02:00",
+        "2026-09-25T15:00:00+02:00",
+    )
+    [finding] = source["findings"]
+    assert "tapo_control" in finding["signature"]
+    assert finding["occurrences"] == 1
+
+
+def test_device_ids_made_of_hex_digits_share_one_signature() -> None:
+    # Eight Shelly devices made eight signatures for the same failure.
+    source = _inline_health(
+        "ha-01",
+        [
+            f"2026-09-25 14:4{index}:00 ERROR (MainThread) "
+            f"[homeassistant.components.shelly] Error fetching {name} data: timed out"
+            for index, name in enumerate(
+                ("shellyproem50-441d64760b64", "shellyproem50-08f9e0e7dc2c")
+            )
+        ],
+        "2026-09-25T14:00:00+02:00",
+        "2026-09-25T15:00:00+02:00",
+    )
+    [finding] = source["findings"]
+    assert finding["occurrences"] == 2
+    assert "441d64760b64" not in finding["signature"]
+
+
 def test_dateless_s6_lines_are_not_swallowed_as_continuations() -> None:
     source = _inline_health(
         "ha-01",

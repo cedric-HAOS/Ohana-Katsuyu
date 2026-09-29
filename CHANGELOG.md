@@ -2,6 +2,18 @@
 
 ## Non publié
 
+- Journaux : une ligne vide ne termine plus l'enregistrement en cours. Python
+  sépare les exceptions chaînées par des lignes vides : « During handling of
+  the above exception », « raise exception », les classes d'exception non
+  nommées `...Error` devenaient cinq anomalies orphelines à côté de l'erreur
+  Tapo (HA-01, 29 septembre). Dans une trace (`Traceback (most recent call
+  last)`), toute ligne sans date appartient à l'enregistrement.
+- Journaux : les identifiants de douze chiffres hexadécimaux ou plus
+  (`shellyproem50-441d64760b64`, adresses MAC) sont normalisés : un même défaut
+  sur plusieurs appareils du même modèle fait une seule signature. Les
+  signatures concernées changent une fois (tendance « nouvelle »).
+- Mesure : 200 000 lignes analysées en 2,3 s.
+
 - Mise à jour automatique : le démarrage du worker vérifie la dernière release
   sans attendre la fin de l'intervalle de 6 h (redémarrer le PC suffit à
   trouver une release publiée depuis la dernière vérification) ; les

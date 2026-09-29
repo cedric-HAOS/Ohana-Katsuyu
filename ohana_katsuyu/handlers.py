@@ -166,9 +166,12 @@ _ANOMALY = re.compile(
     r"transmission failed)\b",
     re.IGNORECASE,
 )
+# Identifiers made of hex digits (device ids such as the 441d64760b64 tail of
+# "shellyproem50-441d64760b64", MAC addresses without separators) vary per
+# device: eight Shelly devices made eight signatures for one failure.
 _VARIABLE = re.compile(
     r"\b(?:[0-9a-f]{8}-[0-9a-f-]{27,}|0x[0-9a-f]+|"
-    r"\d{1,3}(?:\.\d{1,3}){3}|\d+)\b",
+    r"\d{1,3}(?:\.\d{1,3}){3}|(?=[0-9a-f]*\d)[0-9a-f]{12,}|\d+)\b",
     re.IGNORECASE,
 )
 _ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b", re.IGNORECASE)
@@ -891,19 +894,32 @@ class LogsHealthCheckHandler:
             source, lines, started_at, ended_at
         )
         record_at: datetime | None = None
+        # Inside a traceback every undated line belongs to the record: exception
+        # classes are not always named ...Error (requests ConnectTimeout).
+        in_traceback = False
         bounded = lines[:200_000]
         clock_times = _clock_only_times(bounded, collected_at or ended_at)
         for index, line in enumerate(bounded):
+            if not line.strip():
+                # Python separates chained tracebacks with blank lines: a blank
+                # line does not end the record ("During handling of the above
+                # exception" made 5 orphan findings under Tapo, 28 September).
+                analyzed_lines += 1
+                continue
             occurred_at = _parse_log_timestamp(line) or clock_times.get(index)
             continuation = (
                 occurred_at is None
                 and record_at is not None
-                and _CONTINUATION.match(line) is not None
+                and (in_traceback or _CONTINUATION.match(line) is not None)
             )
             if continuation:
                 occurred_at = record_at
+                in_traceback = in_traceback or line.startswith(
+                    "Traceback (most recent call last)"
+                )
             else:
                 record_at = occurred_at
+                in_traceback = False
             if occurred_at is not None and not (started_at <= occurred_at <= ended_at):
                 continue
             analyzed_lines += 1
