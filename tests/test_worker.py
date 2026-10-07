@@ -77,6 +77,32 @@ def test_agent_client_sends_previous_worker_identity_only_for_migration(
     assert requests[0].get_header("X-ohana-previous-worker-id") == "katsuyu-Bubule"
 
 
+@pytest.mark.parametrize(
+    ("source_id", "configured_timeout", "expected_timeout"),
+    [("infra-01", 10.0, 45.0), ("infra-01", 60.0, 60.0), ("ha-01", 10.0, 10.0)],
+)
+def test_infra_log_read_allows_agent_journal_deadline(
+    monkeypatch: Any,
+    source_id: str,
+    configured_timeout: float,
+    expected_timeout: float,
+) -> None:
+    def fake_urlopen(request: Any, *, timeout: float, context: Any) -> BytesIO:
+        assert timeout == expected_timeout
+        assert request.get_header("X-ohana-worker-id") == "worker-1"
+        assert request.get_header("X-ohana-attempt") == "2"
+        if source_id == "infra-01" and timeout <= 30:
+            raise TimeoutError("Agent journal read still running")
+        return BytesIO(b'{"transport":"inline","content":"journal"}')
+
+    monkeypatch.setattr("ohana_katsuyu.worker.urlopen", fake_urlopen)
+    client = AgentClient("http://infra-01:8766", "secret", configured_timeout)
+    assert client.read_log_source("job-1", "worker-1", 2, source_id) == {
+        "transport": "inline",
+        "content": "journal",
+    }
+
+
 def test_worker_loads_bounded_setup_configuration(tmp_path) -> None:
     paths = {
         "token_file": tmp_path / "katsuyu.token",

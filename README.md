@@ -220,6 +220,13 @@ le setup final.
 
 ## Fin du cycle de journaux (0.8.6)
 
+Depuis 0.13.2, la récupération du journal `infra-01` auprès d'Agent dispose
+d'au moins 45 secondes, afin de couvrir sa lecture système bornée à 30 secondes
+et le transfert de la réponse. Un délai client configuré plus long est conservé.
+Cela s'applique aux contrôles de journaux et aux investigations ciblées.
+Un contrôle réussi peut encore signaler un échec historique présent dans la
+fenêtre analysée ; il ne supprime pas cet historique.
+
 Mettre Agent à jour en 1.26.16 avant Katsuyu. Le worker transmet les journaux,
 puis prend les diagnostics complémentaires décidés par Tsunade. L’arrêt n’est
 autorisé que par un polling à vide après traitement des résultats, avec la

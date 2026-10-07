@@ -2,6 +2,22 @@
 
 ## Non publié
 
+## [0.13.2] — 2026-10-07 — Délai de collecte du journal INFRA-01
+
+### Corrigé
+
+- La lecture de la source `infra-01` attend désormais au moins 45 secondes.
+  Agent peut consacrer jusqu'à 30 secondes à la lecture du journal système ;
+  le délai client par défaut de 10 secondes pouvait interrompre cette collecte.
+  Les délais configurés supérieurs à 45 secondes restent respectés et les
+  autres sources conservent leur délai habituel. Ce correctif concerne les
+  contrôles de journaux et les investigations ciblées.
+- L'échec du contrôle du 07/10 à 05:03:21 (« Unable to read Agent log source:
+  The read operation timed out ») est compatible avec ce décalage. Le contrôle
+  manuel de 13:39 a retrouvé sa trace dans l'incident INFRA-01 existant.
+  Le prochain cycle après installation doit confirmer l'effet du correctif ;
+  les incidents historiques sont conservés.
+
 ## [0.13.1] — 2026-09-29 — Session rouverte par Windows : l'arrêt n'est plus bloqué
 
 Publiée le jour même de 0.13.0, à la demande de l'utilisateur.

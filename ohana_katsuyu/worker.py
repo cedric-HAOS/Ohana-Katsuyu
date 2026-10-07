@@ -294,6 +294,13 @@ class AgentClient:
         source_id: str,
     ) -> dict[str, Any]:
         """Read a job-bound descriptor for one bounded log source."""
+        # Agent reads the INFRA journal synchronously with a 30-second deadline.
+        # Allow that read and response transfer to finish before timing out.
+        timeout = (
+            max(self.timeout_seconds, 45.0)
+            if source_id == "infra-01"
+            else self.timeout_seconds
+        )
         request = Request(
             url=(
                 f"{self.base_url.rstrip('/')}/v1/jobs/{quote(job_id, safe='')}"
@@ -305,7 +312,7 @@ class AgentClient:
         try:
             with urlopen(
                 request,
-                timeout=self.timeout_seconds,
+                timeout=timeout,
                 context=self._ssl_context(),
             ) as response:
                 value = json.load(response)
