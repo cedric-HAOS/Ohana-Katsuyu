@@ -2,6 +2,10 @@
 
 ## Non publié
 
+- Intégration continue GitHub Actions : Ruff (contrôle et format) sur Linux, tests
+  sur Windows (le worker ne tourne que sous Windows 11) et contrôle des messages
+  de commit. Katsuyu n'avait aucun contrôle automatique.
+
 ## [0.13.2] — 2026-10-07 — Délai de collecte du journal INFRA-01
 
 ### Corrigé
