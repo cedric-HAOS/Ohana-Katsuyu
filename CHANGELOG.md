@@ -2,8 +2,8 @@
 
 ## Non publié
 
-- `logs.investigate` accepte une fenêtre de 24 heures au plus (deux heures
-  auparavant), pour l'extension autorisée depuis Vision d'une investigation
+- Investigation des journaux sur 24 heures : `logs.investigate` accepte une fenêtre
+  de 24 heures au plus (deux heures auparavant), pour l'extension autorisée depuis Vision d'une investigation
   terminée. Sans cette version, Katsuyu refuse le travail et le suivi est signalé
   « interrompu ».
 
