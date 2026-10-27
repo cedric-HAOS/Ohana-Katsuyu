@@ -304,10 +304,10 @@ class LogsInvestigateParameters(ProtocolModel):
         ):
             raise ValueError("log investigation timestamps must include a timezone")
         duration = self.window_ended_at - self.window_started_at
-        if duration.total_seconds() <= 0 or duration.total_seconds() > 2 * 3600:
+        if duration.total_seconds() <= 0 or duration.total_seconds() > 24 * 3600:
             raise ValueError(
                 "log investigation window must be greater than zero "
-                "and at most two hours"
+                "and at most 24 hours"
             )
         if any(character in self.pattern for character in "\r\n\0"):
             raise ValueError("log investigation pattern must be plain single-line text")

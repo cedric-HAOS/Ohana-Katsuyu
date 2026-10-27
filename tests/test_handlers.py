@@ -786,6 +786,38 @@ def test_logs_investigate_returns_only_a_grouped_synthesis(monkeypatch) -> None:
     assert "2026-08-24" not in result["findings"][0]["summary"]
 
 
+def test_logs_investigate_accepts_a_24_hour_window_and_nothing_wider() -> None:
+    content = "\n".join(
+        [
+            "2026-09-15T05:00:00+02:00 ERROR Node 17 transmission failed",
+            "2026-09-14T09:00:00+02:00 ERROR Node 17 transmission failed",
+            "2026-09-14T05:00:00+02:00 ERROR Node 17 outside the window",
+        ]
+    )
+    provider = lambda *_args: {  # noqa: E731
+        "source": "infra-01",
+        "transport": "inline",
+        "content": content,
+        "truncated": False,
+    }
+    parameters = {
+        "source": "infra-01",
+        "window_started_at": "2026-09-14T06:00:00+02:00",
+        "window_ended_at": "2026-09-15T06:00:00+02:00",
+        "pattern": "Node 17",
+        "max_bytes": 4096,
+        "incident_id": "11111111-1111-4111-8111-111111111111",
+    }
+    result = LogsInvestigateHandler(provider).execute(parameters, _log_context())
+    assert result["matched_lines"] == 2
+
+    with pytest.raises(ValueError, match="24 hours"):
+        LogsInvestigateHandler(provider).execute(
+            {**parameters, "window_started_at": "2026-09-14T05:59:59+02:00"},
+            _log_context(),
+        )
+
+
 def test_logs_health_check_uses_supervisor_proxy_and_discovered_addon(
     monkeypatch,
 ) -> None:

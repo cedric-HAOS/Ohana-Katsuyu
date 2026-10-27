@@ -2,6 +2,11 @@
 
 ## Non publié
 
+- `logs.investigate` accepte une fenêtre de 24 heures au plus (deux heures
+  auparavant), pour l'extension autorisée depuis Vision d'une investigation
+  terminée. Sans cette version, Katsuyu refuse le travail et le suivi est signalé
+  « interrompu ».
+
 - Intégration continue GitHub Actions : Ruff (contrôle et format) sur Linux, tests
   sur Windows (le worker ne tourne que sous Windows 11) et contrôle des messages
   de commit. Katsuyu n'avait aucun contrôle automatique.
