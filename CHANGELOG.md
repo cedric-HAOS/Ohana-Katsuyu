@@ -2,6 +2,14 @@
 
 ## Non publié
 
+## [0.14.2] — 2026-11-06 — Rattrapage de la 0
+
+- Rattrapage de la 0.14.1 : cette version a été publiée sans le code du correctif
+  (seuls le numéro de version et le journal des modifications y figuraient). La
+  0.14.2 contient le correctif annoncé : une source de journaux illisible
+  n'arrête plus le contrôle quotidien des trois autres, elle devient un constat
+  explicite `log-source-unreadable`, et le message nomme les deux tentatives.
+
 ## [0.14.1] — 2026-11-06 — Contrôle quotidien des journaux (`logs
 
 - Contrôle quotidien des journaux (`logs.health_check`) : une source illisible
