@@ -2,6 +2,18 @@
 
 ## Non publié
 
+## [0.14.1] — 2026-11-06 — Contrôle quotidien des journaux (`logs
+
+- Contrôle quotidien des journaux (`logs.health_check`) : une source illisible
+  n'abandonne plus le contrôle des trois autres. L'erreur HTTP 500 du repli sur
+  le journal du cœur de Home Assistant n'était pas rattrapée et faisait échouer
+  le job entier (échecs quotidiens à 05:02 depuis le 28/10). La source devient
+  un constat explicite `log-source-unreadable` (KO, tronquée, donc aucune
+  anomalie ancienne n'est déclarée disparue).
+- Le message nomme désormais les deux tentatives (« Supervisor HTTP 500 ; core
+  log fallback HTTP 500 »), sans URL ni jeton, pour établir la cause côté
+  Home Assistant.
+
 ## [0.14.0] — 2026-10-27 — Investigation des journaux sur 24 heures
 
 - Investigation des journaux sur 24 heures : `logs.investigate` accepte une fenêtre
