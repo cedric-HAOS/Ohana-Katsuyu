@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from threading import Event
 from time import monotonic, process_time, sleep
 from typing import Any, Protocol
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
@@ -546,6 +547,19 @@ def _selected_log_groups(
     )[:64]
 
 
+class LogAccessError(RuntimeError):
+    """A log read failed; the message names the attempts and holds no secret."""
+
+
+def _describe_log_error(error: BaseException) -> str:
+    """Name a log access failure without echoing URLs, tokens or messages."""
+    if isinstance(error, HTTPError):
+        return f"HTTP {error.code}"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    return type(error).__name__
+
+
 class _DirectLogReader:
     def __init__(self, source_provider: LogSourceProvider) -> None:
         self.source_provider = source_provider
@@ -613,25 +627,39 @@ class _DirectLogReader:
                     len(payload),
                     truncated,
                 )
+            except (JobCancelledError, JobTimeoutError):
+                raise
             except (OSError, RuntimeError, ValueError, WebSocketException) as error:
                 # Keep the primary Supervisor/proxy failure visible when the
                 # compatibility URL is used as a bounded fallback.
+                supervisor_error = _describe_log_error(error)
                 supervisor_warning = (
                     "ERROR Katsuyu Supervisor log access unavailable: "
-                    f"{type(error).__name__}; using Home Assistant "
+                    f"{supervisor_error}; using Home Assistant "
                     "core log fallback\n"
                 ).encode("utf-8", errors="replace")
             else:  # pragma: no cover - return above documents the successful branch.
                 supervisor_warning = b""
         else:
             supervisor_warning = b""
+            supervisor_error = ""
         context.check()
-        with urlopen(  # noqa: S310 - Agent supplies an allowlisted configured URL.
-            request,
-            timeout=min(max(timeout, 5), 60),
-            context=tls_context,
-        ) as response:
-            payload = response.read(max_bytes + 1)
+        try:
+            with urlopen(  # noqa: S310 - Agent supplies an allowlisted configured URL.
+                request,
+                timeout=min(max(timeout, 5), 60),
+                context=tls_context,
+            ) as response:
+                payload = response.read(max_bytes + 1)
+        except (OSError, ValueError) as error:
+            # Name both attempts: the fallback alone hides why the Supervisor
+            # read failed first.
+            detail = f"core log fallback {_describe_log_error(error)}"
+            if supervisor_error:
+                detail = f"Supervisor {supervisor_error}; {detail}"
+            raise LogAccessError(
+                f"Home Assistant log access failed: {detail}"
+            ) from error
         context.check()
         # Legacy Agent URLs request at most 10,000 lines: reaching that cap
         # cannot demonstrate that the source is complete. A fallback also loses
@@ -803,12 +831,19 @@ class LogsHealthCheckHandler:
                 "logs.fetching",
                 source,
             )
-            lines, fetched_bytes, truncated = self.reader.read(
-                source,
-                request.max_bytes_per_source,
-                runtime,
-                request.window_started_at,
-            )
+            try:
+                lines, fetched_bytes, truncated = self.reader.read(
+                    source,
+                    request.max_bytes_per_source,
+                    runtime,
+                    request.window_started_at,
+                )
+            except (JobCancelledError, JobTimeoutError):
+                raise
+            except (OSError, RuntimeError, ValueError, WebSocketException) as error:
+                # One unreachable source must not discard the other three.
+                results.append(self._unreadable_source(source, error, baseline))
+                continue
             results.append(
                 self._analyze_source(
                     source,
@@ -874,6 +909,41 @@ class LogsHealthCheckHandler:
         )
         runtime.report(100, "logs.complete")
         return result.model_dump(mode="json")
+
+    @staticmethod
+    def _unreadable_source(
+        source: str,
+        error: BaseException,
+        baseline: dict[tuple[str, str], int],
+    ) -> LogSourceHealth:
+        """Report a source Katsuyu could not read as an explicit finding.
+
+        The source is marked truncated so none of its earlier anomalies is
+        reported as disappeared on the strength of a read that never happened.
+        """
+        signature = "log-source-unreadable"
+        previous = baseline.get((source, signature))
+        message = str(error) if isinstance(error, LogAccessError) else ""
+        detail = _safe_log_text(message)[:380] or _describe_log_error(error)
+        return LogSourceHealth(
+            source=source,
+            status="KO",
+            fetched_bytes=0,
+            truncated=True,
+            analyzed_lines=0,
+            findings=[
+                LogFinding(
+                    source=source,
+                    signature=signature,
+                    category="network",
+                    severity="error",
+                    summary=f"Log source could not be read: {detail}",
+                    occurrences=1,
+                    reference_occurrences=previous,
+                    trend="new" if previous is None else "known",
+                )
+            ],
+        )
 
     @staticmethod
     def _analyze_source(

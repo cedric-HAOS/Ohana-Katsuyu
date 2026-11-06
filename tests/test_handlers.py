@@ -1055,6 +1055,104 @@ def test_supervisor_fallback_is_incomplete_and_does_not_expose_error_secrets(
     assert "secret" not in str(lines)
 
 
+def _http_500(*_args, **_kwargs):
+    from urllib.error import HTTPError
+
+    raise HTTPError("http://user:secret@ha.test/", 500, "boom", {}, None)
+
+
+def test_fallback_failure_names_both_attempts_without_secrets(monkeypatch) -> None:
+    from ohana_katsuyu.handlers import LogAccessError, _DirectLogReader
+
+    def failure(*args, **kwargs):
+        raise RuntimeError("access_token=privatePassword")
+
+    monkeypatch.setattr(_DirectLogReader, "_read_supervisor", failure)
+    monkeypatch.setattr("ohana_katsuyu.handlers.urlopen", _http_500)
+    reader = _DirectLogReader(
+        lambda *a: {
+            "source": "ha-01",
+            "base_url": "http://ha.test:8123",
+            "url": "http://ha.test:8123/api/error_log",
+            "access_token": "privatePassword",
+        }
+    )
+    with pytest.raises(LogAccessError) as raised:
+        reader.read("ha-01", 4096, _log_context())
+    message = str(raised.value)
+    assert "Supervisor RuntimeError" in message
+    assert "core log fallback HTTP 500" in message
+    assert "privatePassword" not in message
+    assert "secret" not in message
+
+
+def test_logs_health_check_keeps_other_sources_when_one_is_unreadable(
+    monkeypatch,
+) -> None:
+    from ohana_katsuyu.handlers import _DirectLogReader
+
+    monkeypatch.setattr(_DirectLogReader, "_read_supervisor", _http_500)
+
+    def urlopen_by_source(request, **_kwargs):
+        if "ha-01" in request.full_url:
+            return _http_500()
+        return io.BytesIO(b"2026-08-24T09:02:00+00:00 INFO healthy\n")
+
+    def provider(job_id, worker_id, attempt, source):
+        descriptor = _log_provider(job_id, worker_id, attempt, source)
+        if source != "ha-01":
+            return descriptor
+        return {**descriptor, "base_url": f"http://{source}.ohana.lan:8123"}
+
+    monkeypatch.setattr("ohana_katsuyu.handlers.urlopen", urlopen_by_source)
+    result = LogsHealthCheckHandler(provider).execute(
+        {
+            "sources": ["ha-01", "zwave-01"],
+            "window_started_at": "2026-08-24T00:00:00+00:00",
+            "window_ended_at": "2026-08-25T00:00:00+00:00",
+            "max_bytes_per_source": 4096,
+            "baseline": [
+                {"source": "ha-01", "signature": "old", "occurrences": 3},
+            ],
+        },
+        _log_context(),
+    )
+    by_source = {item["source"]: item for item in result["sources"]}
+    assert set(by_source) == {"ha-01", "zwave-01"}
+    assert by_source["zwave-01"]["status"] == "OK"
+    unreadable = by_source["ha-01"]
+    assert unreadable["status"] == "KO"
+    assert unreadable["truncated"] is True
+    finding = unreadable["findings"][0]
+    assert finding["signature"] == "log-source-unreadable"
+    assert finding["trend"] == "new"
+    assert "Supervisor HTTP 500" in finding["summary"]
+    assert "core log fallback HTTP 500" in finding["summary"]
+    assert "secret" not in finding["summary"]
+    assert result["status"] == "KO"
+    # An unread source cannot prove that its earlier anomalies disappeared.
+    assert result["disappeared_anomalies"] == []
+
+
+def test_logs_health_check_still_propagates_cancellation(monkeypatch) -> None:
+    from ohana_katsuyu.handlers import JobCancelledError, _DirectLogReader
+
+    def cancelled(*_args, **_kwargs):
+        raise JobCancelledError("job cancelled by Tsunade")
+
+    monkeypatch.setattr(_DirectLogReader, "read", cancelled)
+    with pytest.raises(JobCancelledError):
+        LogsHealthCheckHandler(_log_provider).execute(
+            {
+                "sources": ["ha-01"],
+                "window_started_at": "2026-08-24T00:00:00+00:00",
+                "window_ended_at": "2026-08-25T00:00:00+00:00",
+                "max_bytes_per_source": 4096,
+            },
+            _log_context(),
+        )
+
+
 def _infra_source_tar(backup_id: str = "20260820T120000Z") -> bytes:
     output = io.BytesIO()
     descriptor = json.dumps(
