@@ -1,0 +1,19 @@
+name: Écosystème
+
+# Documentation de tous les dépôts Ohana et Sandbox complète, avec ce dépôt au
+# commit poussé. Fichier séparé de la CI : si le workflow de Platform est
+# introuvable, la CI de ce dépôt tourne quand même.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ecosystem:
+    name: Écosystème
+    uses: cedric-HAOS/Ohana-Platform/.github/workflows/ecosystem.yml@main
